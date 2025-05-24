@@ -1,692 +1,414 @@
-Updated codes………..
-# src/gui_face.py
-import pygame
-import threading
-import math
-import time
-import random
-from src.config import IS_FULLSCREEN, SCREEN_WIDTH_WINDOWED, SCREEN_HEIGHT_WINDOWED
-
-class RobotFaceGUI:
-    def __init__(self):
-        pygame.init()
-        if IS_FULLSCREEN:
-            info = pygame.display.Info()
-            self.WIDTH, self.HEIGHT = info.current_w, info.current_h
-            self.screen = pygame.display.set_mode((self.WIDTH, self.HEIGHT), pygame.FULLSCREEN)
-        else:
-            self.WIDTH, self.HEIGHT = SCREEN_WIDTH_WINDOWED, SCREEN_HEIGHT_WINDOWED
-            self.screen = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
-
-        pygame.display.set_caption("Loki – Your Expressive Assistant")
-        
-        try:
-            self.font = pygame.font.SysFont("SF Pro Display", 36, bold=True)
-        except:
-            self.font = pygame.font.SysFont("Arial", 32, bold=True)
-
-        self.BLACK = (0, 0, 0)
-        self.WHITE = (255, 255, 255)
-        self.GREY = (40, 40, 40)
-        self.ROBO_ACCENT_COLOR = (70, 150, 255)
-        self.LOVELY_PUPIL_COLOR = (255, 105, 180)
-        self.ANGRY_PUPIL_COLOR = (255, 50, 50)
-        self.BLUSH_COLOR_BASE = (255, 182, 193)
-
-        self.FACE_CENTER_X = self.WIDTH // 2
-        self.FACE_CENTER_Y = self.HEIGHT // 2
-        self.EYE_Y_OFFSET = 90
-        self.EYE_SPACING = 130
-        self.EYE_WIDTH = 60
-        self.EYE_HEIGHT = 100
-        self.PUPIL_RADIUS_NORMAL = 12
-        self.PUPIL_Y_IN_EYE_OFFSET = 15
-        self.MOUTH_Y_OFFSET = 100
-        self.MOUTH_BASE_WIDTH = 160
-        self.MOUTH_BASE_HEIGHT = 70
-
-        self.current_expression = "neutral"
-        self.message = "Initializing..."
-        self.expression_lock = threading.Lock()
-
-        self.animation_state = {
-            "last_blink_time": 0,
-            "blink_interval": 3000,
-            "blink_duration": 150,
-            "is_blinking": False,
-            "talking_mouth_frame_start_time": 0,
-            "talking_mouth_frame_interval": 80,  # ms per frame (FASTER)
-            "current_talking_mouth_frame": 0,
-            "num_talking_mouth_frames": 5, # INCREASED number of frames
-            "talking_eye_squeeze_factor": 1.0,
-            "talking_eye_squeeze_phase": 0,
-            "blush_alpha": 0,
-            "blush_target_alpha": 0,
-            "pupil_offset_x": 0,
-            "pupil_offset_y_extra": 0,
-        }
-        self.animation_lock = threading.Lock()
-        
-        self.running = True
-        self.clock = pygame.time.Clock()
-
-    def _draw_stylized_eye(self, surface, center_x, center_y, width, height, pupil_radius, expression, is_blinking_now, pupil_offset_x_anim, pupil_offset_y_extra_anim, eye_squeeze_factor_anim):
-        current_eye_height = int(height * eye_squeeze_factor_anim)
-        eye_outer_rect = pygame.Rect(center_x - width // 2, center_y - current_eye_height // 2, width, current_eye_height)
-        pygame.draw.rect(surface, self.WHITE, eye_outer_rect, border_radius=int(width*0.3))
-
-        if is_blinking_now:
-            lid_rect = pygame.Rect(eye_outer_rect.left, center_y - 10, eye_outer_rect.width, 20)
-            pygame.draw.rect(surface, self.BLACK, lid_rect, border_radius=int(width*0.3))
-            pygame.draw.line(surface, self.WHITE, (eye_outer_rect.left + 5, center_y), (eye_outer_rect.right - 5, center_y), 3)
-            return
-
-        pupil_base_x = center_x + pupil_offset_x_anim
-        pupil_base_y = center_y + self.PUPIL_Y_IN_EYE_OFFSET * eye_squeeze_factor_anim + pupil_offset_y_extra_anim
-        current_pupil_radius = pupil_radius
-
-        if expression == "talking":
-             current_pupil_radius *= (1.1 + 0.2 * math.sin(self.animation_state["talking_eye_squeeze_phase"]))
-
-        if expression == "happy" or expression == "smiling":
-            current_pupil_radius *= 1.3
-            pygame.draw.circle(surface, self.ROBO_ACCENT_COLOR, (pupil_base_x, pupil_base_y - 5), current_pupil_radius)
-        elif expression == "laughing":
-            current_pupil_radius *= 1.2
-            pygame.draw.arc(surface, self.BLACK, [pupil_base_x - current_pupil_radius, pupil_base_y - current_pupil_radius*1.5 - 5, current_pupil_radius*2, current_pupil_radius*2], math.pi * 1.2, math.pi * 1.8, 3)
-            pygame.draw.circle(surface, self.ROBO_ACCENT_COLOR, (pupil_base_x, pupil_base_y + 5), current_pupil_radius)
-        elif expression == "lovely":
-            current_pupil_radius *= 1.6
-            pygame.draw.circle(surface, self.LOVELY_PUPIL_COLOR, (pupil_base_x, pupil_base_y), current_pupil_radius)
-            pygame.draw.circle(surface, self.WHITE, (pupil_base_x+5, pupil_base_y-5), current_pupil_radius*0.3)
-        elif expression == "angry":
-            pygame.draw.polygon(surface, self.BLACK, [
-                (eye_outer_rect.left + 5, eye_outer_rect.top + 25 * eye_squeeze_factor_anim),
-                (eye_outer_rect.right - 5, eye_outer_rect.top + 10 * eye_squeeze_factor_anim),
-                (eye_outer_rect.right - 5, eye_outer_rect.top + 20 * eye_squeeze_factor_anim),
-                (eye_outer_rect.left + 5, eye_outer_rect.top + 35 * eye_squeeze_factor_anim)
-            ])
-            pygame.draw.circle(surface, self.ANGRY_PUPIL_COLOR, (pupil_base_x, pupil_base_y + 5), current_pupil_radius * 0.8)
-        elif expression == "sleepy":
-            lid_rect = pygame.Rect(eye_outer_rect.left, eye_outer_rect.top, eye_outer_rect.width, eye_outer_rect.height * 0.6)
-            pygame.draw.rect(surface, self.BLACK, lid_rect, border_top_left_radius=int(width*0.3), border_top_right_radius=int(width*0.3))
-            pygame.draw.line(surface, self.WHITE, (eye_outer_rect.left+5, eye_outer_rect.top + eye_outer_rect.height*0.6 - 2), (eye_outer_rect.right-5, eye_outer_rect.top + eye_outer_rect.height*0.6 - 2), 3)
-        elif expression == "shying":
-            pygame.draw.circle(surface, self.ROBO_ACCENT_COLOR, (pupil_base_x, pupil_base_y + 10), current_pupil_radius * 0.9)
-        elif expression == "thinking" or expression == "processing" or expression == "listening":
-            pygame.draw.circle(surface, self.ROBO_ACCENT_COLOR, (pupil_base_x, pupil_base_y - 10), current_pupil_radius)
-        else: 
-            pygame.draw.circle(surface, self.ROBO_ACCENT_COLOR, (pupil_base_x, pupil_base_y), current_pupil_radius)
-
-    def _draw_animated_mouth(self, surface, center_x, center_y, base_width, base_height, expression, talking_frame_idx):
-        mouth_rect_center_y = center_y + base_height * 0.2
-
-        if expression == "talking": # Laughing while talking
-            frame = talking_frame_idx
-            laugh_width_factor = 0.7 + 0.1 * math.sin(frame * math.pi / 2) # Dynamic width
-            laugh_height_factor = 0.5 + 0.2 * math.sin(frame * math.pi)   # Dynamic height, more up/down
-
-            current_mouth_width = base_width * laugh_width_factor
-            current_mouth_height = base_height * laugh_height_factor
-
-            # D-shape mouth, animated
-            mouth_rect = pygame.Rect(
-                center_x - current_mouth_width // 2,
-                mouth_rect_center_y - current_mouth_height // 2,
-                current_mouth_width,
-                current_mouth_height
-            )
-            pygame.draw.ellipse(surface, self.WHITE, mouth_rect)
-            # Cut off top to make D-shape (adjust if mouth_rect_center_y is true center)
-            pygame.draw.rect(surface, self.BLACK, 
-                             (mouth_rect.x, mouth_rect.y, 
-                              mouth_rect.width, mouth_rect.height / 2 + 2)) # +2 to ensure full cutoff
-            # Line across the D
-            pygame.draw.line(surface, self.WHITE, 
-                             (mouth_rect.left, mouth_rect.centery), 
-                             (mouth_rect.right, mouth_rect.centery), 5)
-
-        elif expression == "happy" or expression == "smiling":
-            # ... (existing happy/smiling mouth) ...
-            smile_rect = [center_x - base_width*0.35, mouth_rect_center_y - base_height*0.1, base_width*0.7, base_height*0.5]
-            pygame.draw.arc(surface, self.WHITE, smile_rect, math.pi, 2 * math.pi, 7)
-        elif expression == "laughing": # Standalone laughing
-            laugh_width = base_width * 0.8; laugh_height = base_height * 0.6
-            laugh_rect = pygame.Rect(center_x - laugh_width // 2, mouth_rect_center_y - laugh_height // 2, laugh_width, laugh_height)
-            pygame.draw.ellipse(surface, self.WHITE, laugh_rect)
-            pygame.draw.rect(surface, self.BLACK, (laugh_rect.x, laugh_rect.y, laugh_rect.width, laugh_rect.height / 2)) 
-            pygame.draw.line(surface, self.WHITE, (laugh_rect.left, laugh_rect.centery), (laugh_rect.right, laugh_rect.centery), 5)
-        # ... (other expressions) ...
-        elif expression == "angry":
-            frown_rect = [center_x - base_width*0.3, mouth_rect_center_y + base_height*0.05, base_width*0.6, base_height*0.4]
-            pygame.draw.arc(surface, self.WHITE, frown_rect, 0, math.pi, 7)
-        elif expression == "lovely":
-            pygame.draw.ellipse(surface, self.WHITE, (center_x - 20, mouth_rect_center_y, 40, 25))
-        elif expression == "talking":
-            frame = talking_frame_idx # This is self.animation_state["current_talking_mouth_frame"]
-            if frame == 0: # Closed / slight line
-                pygame.draw.line(surface, self.WHITE, (center_x - base_width*0.25, mouth_rect_center_y + 10), (center_x + base_width*0.25, mouth_rect_center_y + 10), 5)
-            elif frame == 1: # Small 'o'
-                pygame.draw.ellipse(surface, self.WHITE, (center_x - base_width*0.15, mouth_rect_center_y + 5, base_width*0.3, base_height*0.25))
-            elif frame == 2: # Medium open
-                pygame.draw.ellipse(surface, self.WHITE, (center_x - base_width*0.3, mouth_rect_center_y, base_width*0.6, base_height*0.4))
-            elif frame == 3: # Wider open, slightly taller
-                pygame.draw.ellipse(surface, self.WHITE, (center_x - base_width*0.35, mouth_rect_center_y - 7, base_width*0.7, base_height*0.55))
-            elif frame == 4: # Medium 'o' (like 'oo' sound)
-                pygame.draw.ellipse(surface, self.WHITE, (center_x - base_width*0.25, mouth_rect_center_y - 2, base_width*0.5, base_height*0.45))
-        elif expression == "sleepy" or expression == "neutral":
-            pygame.draw.line(surface, self.WHITE, (center_x - base_width*0.2, mouth_rect_center_y + 10), (center_x + base_width*0.2, mouth_rect_center_y + 10), 5)
-        elif expression == "thinking" or expression == "processing":
-            points = [
-                (center_x - base_width*0.2, mouth_rect_center_y + 10), (center_x - base_width*0.05, mouth_rect_center_y + 5),
-                (center_x + base_width*0.05, mouth_rect_center_y + 5), (center_x + base_width*0.2, mouth_rect_center_y + 10),
-            ]
-            pygame.draw.lines(surface, self.WHITE, False, points, 5)
-        elif expression == "shying":
-            shy_smile_rect = [center_x - base_width*0.15, mouth_rect_center_y, base_width*0.3, base_height*0.25]
-            pygame.draw.arc(surface, self.WHITE, shy_smile_rect, math.pi, 2 * math.pi, 5)
-        elif expression == "listening":
-            pygame.draw.line(surface, self.WHITE, (center_x - base_width*0.15, mouth_rect_center_y + 8), (center_x + base_width*0.15, mouth_rect_center_y + 8), 4)
-
-    def _draw_blush_effect(self, surface, center_x, eye_y, current_alpha):
-        if current_alpha <= 0: return
-        blush_radius_x = 60; blush_radius_y = 30
-        blush_y_pos = eye_y + self.EYE_HEIGHT // 2 + 30 
-        cheek_x_offset = self.EYE_SPACING + self.EYE_WIDTH // 2 - 10
-        blush_surf = pygame.Surface((blush_radius_x * 2, blush_radius_y * 2), pygame.SRCALPHA)
-        blush_color = (self.BLUSH_COLOR_BASE[0], self.BLUSH_COLOR_BASE[1], self.BLUSH_COLOR_BASE[2], int(current_alpha))
-        pygame.draw.ellipse(blush_surf, blush_color, (0, 0, blush_radius_x, blush_radius_y))
-        left_cheek_pos = (center_x - cheek_x_offset - blush_radius_x, blush_y_pos - blush_radius_y / 2)
-        right_cheek_pos = (center_x + cheek_x_offset, blush_y_pos - blush_radius_y / 2) # Adjusted for single ellipse on surf
-        surface.blit(blush_surf, left_cheek_pos)
-        surface.blit(blush_surf, right_cheek_pos) # Blit same surf again for right side
-
-    def _update_animations_and_state(self, current_time_ticks, current_expr_locked):
-        with self.animation_lock:
-            if not self.animation_state["is_blinking"] and \
-               current_time_ticks - self.animation_state["last_blink_time"] > self.animation_state["blink_interval"]:
-                self.animation_state["is_blinking"] = True
-                self.animation_state["last_blink_time"] = current_time_ticks
-            if self.animation_state["is_blinking"] and \
-               current_time_ticks - self.animation_state["last_blink_time"] > self.animation_state["blink_duration"]:
-                self.animation_state["is_blinking"] = False
-                self.animation_state["last_blink_time"] = current_time_ticks
-                self.animation_state["blink_interval"] = random.randint(2000, 7000)
-
-            if current_expr_locked == "talking":
-                if current_time_ticks - self.animation_state["talking_mouth_frame_start_time"] > self.animation_state["talking_mouth_frame_interval"]:
-                    self.animation_state["current_talking_mouth_frame"] = (self.animation_state["current_talking_mouth_frame"] + 1) % self.animation_state["num_talking_mouth_frames"]
-                    self.animation_state["talking_mouth_frame_start_time"] = current_time_ticks
-                self.animation_state["talking_eye_squeeze_phase"] += 0.2 
-                self.animation_state["talking_eye_squeeze_factor"] = 1.0 - 0.05 * abs(math.sin(self.animation_state["talking_eye_squeeze_phase"]))
-            else:
-                self.animation_state["talking_eye_squeeze_factor"] = 1.0
-
-            should_blush = current_expr_locked in ["shying", "lovely"]
-            self.animation_state["blush_target_alpha"] = 200 if should_blush else 0
-            if self.animation_state["blush_alpha"] != self.animation_state["blush_target_alpha"]:
-                if self.animation_state["blush_alpha"] < self.animation_state["blush_target_alpha"]:
-                    self.animation_state["blush_alpha"] = min(self.animation_state["blush_target_alpha"], self.animation_state["blush_alpha"] + 15)
-                else:
-                    self.animation_state["blush_alpha"] = max(self.animation_state["blush_target_alpha"], self.animation_state["blush_alpha"] - 15)
-
-            if current_expr_locked == "thinking" or current_expr_locked == "processing":
-                self.animation_state["pupil_offset_x"] = -15; self.animation_state["pupil_offset_y_extra"] = -10
-            elif current_expr_locked == "shying":
-                self.animation_state["pupil_offset_x"] = 0; self.animation_state["pupil_offset_y_extra"] = 15
-            elif current_expr_locked == "listening":
-                self.animation_state["pupil_offset_x"] = 0; self.animation_state["pupil_offset_y_extra"] = -5
-            else: 
-                self.animation_state["pupil_offset_x"] = 0; self.animation_state["pupil_offset_y_extra"] = 0
-        
-        with self.animation_lock: # Return copies
-            return ( self.animation_state["is_blinking"], self.animation_state["current_talking_mouth_frame"],
-                     self.animation_state["blush_alpha"], self.animation_state["pupil_offset_x"],
-                     self.animation_state["pupil_offset_y_extra"], self.animation_state["talking_eye_squeeze_factor"] )
-
-    def _draw_scene(self):
-        with self.expression_lock:
-            expr_to_draw = self.current_expression; msg_to_display = self.message
-        current_time = pygame.time.get_ticks()
-        is_blinking_val, talking_frame_idx_val, blush_alpha_val, \
-        pupil_offset_x_val, pupil_offset_y_extra_val, eye_squeeze_val = \
-            self._update_animations_and_state(current_time, expr_to_draw)
-
-        self.screen.fill(self.BLACK)
-        eye_actual_y = self.FACE_CENTER_Y - self.EYE_Y_OFFSET
-        left_eye_x = self.FACE_CENTER_X - self.EYE_SPACING
-        right_eye_x = self.FACE_CENTER_X + self.EYE_SPACING
-        self._draw_stylized_eye(self.screen, left_eye_x, eye_actual_y, self.EYE_WIDTH, self.EYE_HEIGHT, self.PUPIL_RADIUS_NORMAL, expr_to_draw, is_blinking_val, pupil_offset_x_val, pupil_offset_y_extra_val, eye_squeeze_val)
-        self._draw_stylized_eye(self.screen, right_eye_x, eye_actual_y, self.EYE_WIDTH, self.EYE_HEIGHT, self.PUPIL_RADIUS_NORMAL, expr_to_draw, is_blinking_val, pupil_offset_x_val, pupil_offset_y_extra_val, eye_squeeze_val)
-        mouth_actual_y = self.FACE_CENTER_Y + self.MOUTH_Y_OFFSET
-        self._draw_animated_mouth(self.screen, self.FACE_CENTER_X, mouth_actual_y, self.MOUTH_BASE_WIDTH, self.MOUTH_BASE_HEIGHT, expr_to_draw, talking_frame_idx_val)
-        self._draw_blush_effect(self.screen, self.FACE_CENTER_X, eye_actual_y, blush_alpha_val)
-
-        if msg_to_display:
-            text_surface = self.font.render(msg_to_display, True, self.WHITE)
-            text_rect = text_surface.get_rect(center=(self.WIDTH // 2, self.HEIGHT - 70))
-            self.screen.blit(text_surface, text_rect)
-        pygame.display.flip()
-
-    def set_expression(self, expression: str, message: str = ""):
-        with self.expression_lock:
-            self.current_expression = expression
-            if message: self.message = message
-            elif expression == "neutral": self.message = "Hi! I'm Loki."
-
-    def run(self):
-        self.set_expression("neutral", "Hi! I'm Loki. How can I help?")
-        while self.running:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT: self.running = False
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE: self.running = False
-                    # You can add manual test keys here if needed
-            self._draw_scene()
-            self.clock.tick(30)
-        pygame.quit()
-
-# if __name__ == '__main__':
-#     # For testing gui_face.py independently with the stubbed VoiceAI
-#     from voice_ai_stub import VoiceAIStubbed # Assuming you save the stub as voice_ai_stub.py
-#     face_gui = RobotFaceGUI()
-#     voice_stub = VoiceAIStubbed(face_gui) # Create instance of the stub
-#     test_thread = threading.Thread(target=voice_stub.run_assistant_loop, daemon=True)
-#     test_thread.start()
-#     face_gui.run()
-………………………….gui_face.py
-# main.py
-import threading
-from src.gui_face import RobotFaceGUI
-from src.voice_ai import VoiceAI # We'll use the STUBBED version below
-
-def main():
-    print("Starting Loki AI Assistant (Animation Test Mode)...")
-
-    robot_face = RobotFaceGUI()
-    voice_assistant = VoiceAI(robot_face_gui=robot_face) # Pass GUI to STUBBED VoiceAI
-
-    voice_thread = threading.Thread(target=voice_assistant.run_assistant_loop, daemon=True)
-    voice_thread.start()
-
-    robot_face.run() # This runs the Pygame loop
-
-    print("Loki AI Assistant (Animation Test Mode) is shutting down.")
-
-if __name__ == "__main__":
-    main()
-
-
-…………………..main.py
-# src/voice_ai.py
-import speech_recognition as sr
-import pyttsx3
-import google.generativeai as genai
-from src.config import GENAI_API_KEY
-import time
-
-# --- Microphone Preference ---
-# Set this to the EXACT name of the microphone you want to try from your list,
-# or set to None to let the script try to find a suitable one.
-# Examples from your list:
-# MIC_NAME_PREFERENCE = "Microphone (Realtek(R) Audio)" # (This is a good one to try, corresponds to Index 1, 5, 9)
-# MIC_NAME_PREFERENCE = "Microphone Array (Realtek HD Audio Mic input)" # (This one had issues previously)
-MIC_NAME_PREFERENCE = "Microphone (Realtek(R) Audio)" # <<< TRY THIS or another specific one from your list
-# MIC_NAME_PREFERENCE = None # To let it auto-detect
-
-# Configure Gemini AI
-genai.configure(api_key=GENAI_API_KEY)
-try:
-    model = genai.GenerativeModel("gemini-1.5-flash-latest")
-    print("GenAI Model Initialized.")
-except Exception as e:
-    print(f"ERROR: Could not initialize GenAI model: {e}")
-    model = None
-
-# Initialize text-to-speech engine
-engine = pyttsx3.init()
-if engine:
-    engine.setProperty("rate", 170)
-    print("TTS Engine Initialized.")
-else:
-    print("ERROR: pyttsx3 engine could not be initialized. Loki won't speak audibly.")
-
-def get_mic_index(mic_name_preference=None):
-    mic_list = sr.Microphone.list_microphone_names()
-    if not mic_list:
-        print("ERROR: No microphones found by SpeechRecognition.")
-        return None
-
-    print("\n--- Available Microphones ---")
-    for i, name in enumerate(mic_list):
-        print(f"  Index {i}: {name}")
-    print("-----------------------------")
-
-    if mic_name_preference:
-        # Try exact match first
-        for i, name in enumerate(mic_list):
-            if mic_name_preference.lower() == name.lower().strip(): # Exact match, strip whitespace
-                print(f"Found PREFERRED microphone (exact match): '{name}' at index {i}")
-                return i
-        # Try partial match
-        for i, name in enumerate(mic_list):
-            if mic_name_preference.lower() in name.lower(): # Partial match
-                print(f"Found PREFERRED microphone (partial match): '{name}' at index {i}")
-                return i
-        print(f"Warning: Preferred microphone '{mic_name_preference}' not found by exact or partial match. Searching for alternatives.")
-    
-    # Common terms to search for if no preference or preference not found
-    common_mic_terms = ["microphone array", "usb audio", "default", "realtek audio input", "internal microphone"]
-    # Prioritize non-"array" Realtek if "Realtek(R) Audio" was not the preference already chosen
-    if not (mic_name_preference and "realtek(r) audio" in mic_name_preference.lower()):
-        for i, name in enumerate(mic_list):
-            if "realtek(r) audio" in name.lower() and "array" not in name.lower():
-                print(f"Found suitable microphone (common term 'Realtek(R) Audio'): '{name}' at index {i}")
-                return i
-                
-    for term in common_mic_terms:
-        for i, name in enumerate(mic_list):
-            if term in name.lower():
-                print(f"Found suitable microphone (common term '{term}'): '{name}' at index {i}")
-                return i
-    
-    # Fallback: Use the first non-"mapper" microphone if possible
-    for i, name in enumerate(mic_list):
-        if "mapper" not in name.lower(): # Avoid "Microsoft Sound Mapper" as primary
-             print(f"Warning: Using first non-mapper microphone as fallback: '{name}' at index {i}")
-             return i
-
-    # Very last resort: use the first one if all else fails
-    if mic_list:
-        print(f"CRITICAL WARNING: Using the very first microphone as last resort: '{mic_list[0]}' at index 0. This may not be correct.")
-        return 0
-    
-    return None
-
-class VoiceAI:
-    def __init__(self, robot_face_gui):
-        self.gui = robot_face_gui
-        self.recognizer = sr.Recognizer()
-        self.mic_index = get_mic_index(MIC_NAME_PREFERENCE)
-        self.mic_initialized_successfully = False
-
-        if self.mic_index is None:
-            error_msg = "No microphone could be selected!"
-            print(f"❌ {error_msg}")
-            self.gui.set_expression("sad", error_msg)
-            if engine: self.speak_tts_only(error_msg)
-            return
-
-        mic_name_to_try = sr.Microphone.list_microphone_names()[self.mic_index]
-        print(f"Attempting to use microphone: '{mic_name_to_try}' (Index: {self.mic_index})")
-        self.gui.set_expression("neutral", "Initializing Mic...")
-        try:
-            with sr.Microphone(device_index=self.mic_index) as source:
-                print("Calibrating microphone... Please be quiet for a moment.")
-                self.gui.set_expression("neutral", "Calibrating mic...")
-                self.recognizer.adjust_for_ambient_noise(source, duration=1.5)
-                print("Calibration complete.")
-                self.gui.set_expression("neutral", "Mic calibrated!")
-                self.mic_initialized_successfully = True
-        except Exception as e:
-            error_msg = f"Mic Init Error ({mic_name_to_try}): {e}"
-            print(f"❌ {error_msg}")
-            print("   Listening might be impaired or non-functional. Using default energy threshold.")
-            self.gui.set_expression("sad", "Mic Problem!")
-            if engine: self.speak_tts_only(f"I'm having trouble with my microphone: {str(e)[:50]}")
-            self.recognizer.energy_threshold = 3000 
-            self.mic_initialized_successfully = True 
-
-        if self.mic_initialized_successfully:
-            self.recognizer.dynamic_energy_threshold = True
-            self.recognizer.pause_threshold = 0.8 
-            print("Microphone setup complete (or attempted with fallback).")
-        else:
-            print("CRITICAL: Microphone did not initialize. Voice input will likely fail.")
-
-    def speak_tts_only(self, text:str):
-        if engine and text:
-            print(f"🔊 TTS Alert: {text}")
-            engine.say(text)
-            engine.runAndWait()
-
-    def speak(self, text: str, expression_after_speak="neutral"):
-        if not engine:
-            print(f"TTS Engine not available. Cannot speak: {text}")
-            short_display_text = f"Loki (no TTS): {text[:30]}{'...' if len(text) > 30 else ''}"
-            self.gui.set_expression("talking", short_display_text)
-            time.sleep(min(3.0, len(text)/10.0)) 
-            self.gui.set_expression(expression_after_speak)
-            return
-
-        if not text: return
-
-        short_display_text = f"Loki: {text[:35]}{'...' if len(text) > 35 else ''}"
-        self.gui.set_expression("talking", short_display_text)
-        
-        print(f"🤖 Loki says: {text}")
-        try:
-            engine.say(text)
-            engine.runAndWait()
-        except Exception as e:
-            error_msg = f"TTS Error: {e}"
-            print(f"❌ {error_msg}")
-            self.gui.set_expression("sad", "TTS Problem!")
-            time.sleep(2)
-        
-        self.gui.set_expression(expression_after_speak)
-
-    def listen(self, timeout=7, phrase_time_limit=10):
-        if not self.mic_initialized_successfully or self.mic_index is None:
-            self.gui.set_expression("sad", "Mic Unavailable")
-            time.sleep(1)
-            return None
-
-        mic_name_in_use = sr.Microphone.list_microphone_names()[self.mic_index]
-        try:
-            with sr.Microphone(device_index=self.mic_index) as source:
-                self.gui.set_expression("listening", "Listening...")
-                print(f"🎤 Listening via '{mic_name_in_use}'...")
-                audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
-        except sr.WaitTimeoutError:
-            print("No speech detected in time.")
-            self.gui.set_expression("neutral", "Didn't hear you.")
-            return None
-        except Exception as e:
-            error_msg = f"Listen Error ({mic_name_in_use}): {e}"
-            print(f"❌ {error_msg}")
-            self.gui.set_expression("sad", "Listen Problem!")
-            time.sleep(1)
-            return None
-
-        self.gui.set_expression("processing", "Thinking...")
-        try:
-            query = self.recognizer.recognize_google(audio)
-            print(f"🗣️ You said: {query}")
-            return query.lower()
-        except sr.UnknownValueError:
-            print("Sorry, I didn't catch that.")
-            self.speak("Sorry, I didn't quite catch that.", "neutral")
-            return None
-        except sr.RequestError as e:
-            error_msg = f"Speech Service Error: {e}"
-            print(f"❌ {error_msg}")
-            self.speak("My connection to the speech service failed. Check internet.", "sad")
-            return None
-        except Exception as e:
-            error_msg = f"Speech Process Error: {e}"
-            print(f"❌ {error_msg}")
-            self.speak("An unexpected error occurred while processing speech.", "sad")
-            return None
-
-    def get_gemini_response(self, question: str):
-        if not model:
-            return "My AI brain (GenAI) is not available right now."
-        if not question:
-            return "What was the question?"
-            
-        self.gui.set_expression("thinking", "Consulting GenAI...")
-        print(f"🧠 Querying GenAI with: \"{question}\"")
-        try:
-            response = model.generate_content(question)
-            ai_text = response.text
-            if not ai_text or ai_text.isspace():
-                return "I received an empty response from the AI."
-            return ai_text
-        except Exception as e:
-            error_msg = f"GenAI API Error: {e}"
-            print(f"⚠️ {error_msg}")
-            self.gui.set_expression("sad", "AI Brain Error")
-            return "Oops! My AI brain had a hiccup. Please try again."
-
-    def run_assistant_loop(self):
-        if not self.mic_initialized_successfully and self.mic_index is not None :
-            self.speak("My microphone setup failed. I can talk, but not listen. Restart me to try again.", "sad")
-            while self.gui.running:
-                time.sleep(1)
-                if not self.gui.running: break
-            return
-
-        if self.mic_index is None:
-            self.speak("No microphone was found. I can't listen. Check mic and restart.", "sad")
-            while self.gui.running:
-                time.sleep(1)
-                if not self.gui.running: break
-            return
-
-        self.speak("Hi! I am Loki. How can I help you today?", "neutral")
-        
-        while self.gui.running:
-            question = self.listen()
-            if not self.gui.running: break
-            if question is None:
-                time.sleep(0.1)
-                continue
-
-            if any(cmd in question for cmd in ["shutdown loki", "shut down loki", "exit loki", "goodbye loki"]):
-                self.speak("Okay, shutting down. Goodbye!", "sleepy")
-                time.sleep(1.5)
-                self.gui.running = False
-                break
-            
-            answer = self.get_gemini_response(question)
-            self.speak(answer)
-            
-            if not self.gui.running: break
-        
-        print("Voice AI loop finished.")
-…………….voice.py
-
-# src/config.py
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-GENAI_API_KEY = os.getenv("GENAI_API_KEY")
-
-if not GENAI_API_KEY:
-    raise ValueError("Google Generative AI API key not found. Set GENAI_API_KEY in .env file.")
-
-IS_FULLSCREEN = True  # Set to False for windowed mode, True for fullscreen
-SCREEN_WIDTH_WINDOWED = 1000
-SCREEN_HEIGHT_WINDOWED = 800
-……………………..config.py
-
-import cv2
-import face_recognition
-import os
-import pyttsx3
-from datetime import datetime
-import csv
-
-print("🧠 Face Recognition + Greeting Module Starting...")
-
-# === Initialize TTS Engine ===
-engine = pyttsx3.init()
-engine.setProperty('rate', 175)  # Speed of speech
-
-def speak_greeting(name):
-    hour = datetime.now().hour
-    if hour < 12:
-        greeting = "Good morning"
-    elif hour < 18:
-        greeting = "Good afternoon"
-    else:
-        greeting = "Good evening"
-    message = f"{greeting}, {name}! Welcome back."
-    print(f"[Voice] {message}")
-    engine.say(message)
-    engine.runAndWait()
-
-# === Load Known Faces ===
-known_face_encodings = []
-known_face_names = []
-
-known_faces_dir = 'known_faces'
-
-for filename in os.listdir(known_faces_dir):
-    if filename.endswith(".jpg") or filename.endswith(".png"):
-        image_path = os.path.join(known_faces_dir, filename)
-        image = face_recognition.load_image_file(image_path)
-        encoding = face_recognition.face_encodings(image)[0]
-        known_face_encodings.append(encoding)
-        known_face_names.append(os.path.splitext(filename)[0])
-
-# === Open Visit Log File ===
-log_file = open('visit_log.csv', mode='a', newline='')
-log_writer = csv.writer(log_file)
-
-# === Webcam & Recognition ===
-video_capture = cv2.VideoCapture(0)
-greeted = set()  # To avoid repeating greetings
-
-while True:
-    ret, frame = video_capture.read()
-    small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-    rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-
-    face_locations = face_recognition.face_locations(rgb_small_frame)
-    face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
-
-    face_names = []
-    for face_encoding in face_encodings:
-        matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-        name = "Unknown"
-        face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-
-        if len(face_distances) > 0:
-            best_match_index = face_distances.argmin()
-            if matches[best_match_index]:
-                name = known_face_names[best_match_index]
-
-        face_names.append(name)
-
-        if name != "Unknown" and name not in greeted:
-            speak_greeting(name)
-            greeted.add(name)
-            log_writer.writerow([name, datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
-
-    for (top, right, bottom, left), name in zip(face_locations, face_names):
-        top *= 4
-        right *= 4
-        bottom *= 4
-        left *= 4
-
-        # Draw the box
-        cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-        # Label with name..
-        cv2.rectangle(frame, (left, bottom - 35), (right, bottom), (0, 255, 0), cv2.FILLED)
-        font = cv2.FONT_HERSHEY_DUPLEX
-        cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, (0, 0, 0), 1)
-
-    cv2.imshow('VirtuX Face Recognition', frame)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-video_capture.release()
-cv2.destroyAllWindows()
-log_file.close()
-
-….face detecotor
+Microsoft Windows [Version 10.0.22631.5335]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\System32>cd C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid
+
+C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>py -3.12 --version
+Python 3.12.5
+
+C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>py -3.12 -m venv .venv_robot
+
+C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>.venv_robot\Scripts\activate
+'"C:\WINDOWS\System32\chcp.com"' is not recognized as an internal or external command,
+operable program or batch file.
+
+(.venv_robot) C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>python -m pip install --upgrade pip
+Requirement already satisfied: pip in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (24.2)
+Collecting pip
+  Using cached pip-25.1.1-py3-none-any.whl.metadata (3.6 kB)
+Using cached pip-25.1.1-py3-none-any.whl (1.8 MB)
+Installing collected packages: pip
+  Attempting uninstall: pip
+    Found existing installation: pip 24.2
+    Uninstalling pip-24.2:
+      Successfully uninstalled pip-24.2
+Successfully installed pip-25.1.1
+
+(.venv_robot) C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>pip install pygame speech_recognition pyttsx3 pywhatkit wikipedia pyjokes opencv-python face_recognition dlib transformers torch
+Collecting pygame
+  Downloading pygame-2.6.1-cp312-cp312-win_amd64.whl.metadata (13 kB)
+ERROR: Could not find a version that satisfies the requirement speech_recognition (from versions: none)
+ERROR: No matching distribution found for speech_recognition
+
+(.venv_robot) C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>pip install speech recognition
+Collecting speech
+  Downloading speech-0.5.2.tar.gz (18 kB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+ERROR: Could not find a version that satisfies the requirement recognition (from versions: none)
+ERROR: No matching distribution found for recognition
+
+(.venv_robot) C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>pip install pygame SpeechRecognition pyttsx3 pywhatkit wikipedia pyjokes opencv-python face_recognition dlib transformers torch
+Collecting pygame
+  Using cached pygame-2.6.1-cp312-cp312-win_amd64.whl.metadata (13 kB)
+Collecting SpeechRecognition
+  Using cached speechrecognition-3.14.3-py3-none-any.whl.metadata (30 kB)
+Collecting pyttsx3
+  Using cached pyttsx3-2.98-py3-none-any.whl.metadata (3.8 kB)
+Collecting pywhatkit
+  Using cached pywhatkit-5.4-py3-none-any.whl.metadata (5.5 kB)
+Collecting wikipedia
+  Using cached wikipedia-1.4.0.tar.gz (27 kB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+Collecting pyjokes
+  Using cached pyjokes-0.8.3-py3-none-any.whl.metadata (3.4 kB)
+Collecting opencv-python
+  Using cached opencv_python-4.11.0.86-cp37-abi3-win_amd64.whl.metadata (20 kB)
+Collecting face_recognition
+  Using cached face_recognition-1.3.0-py2.py3-none-any.whl.metadata (21 kB)
+Collecting dlib
+  Using cached dlib-19.24.9.tar.gz (3.4 MB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+Collecting transformers
+  Using cached transformers-4.52.3-py3-none-any.whl.metadata (40 kB)
+Collecting torch
+  Downloading torch-2.7.0-cp312-cp312-win_amd64.whl.metadata (29 kB)
+Collecting typing-extensions (from SpeechRecognition)
+  Using cached typing_extensions-4.13.2-py3-none-any.whl.metadata (3.0 kB)
+Collecting comtypes (from pyttsx3)
+  Using cached comtypes-1.4.11-py3-none-any.whl.metadata (7.2 kB)
+Collecting pypiwin32 (from pyttsx3)
+  Using cached pypiwin32-223-py3-none-any.whl.metadata (236 bytes)
+Collecting pywin32 (from pyttsx3)
+  Downloading pywin32-310-cp312-cp312-win_amd64.whl.metadata (9.4 kB)
+Collecting Pillow (from pywhatkit)
+  Downloading pillow-11.2.1-cp312-cp312-win_amd64.whl.metadata (9.1 kB)
+Collecting pyautogui (from pywhatkit)
+  Using cached PyAutoGUI-0.9.54.tar.gz (61 kB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+Collecting requests (from pywhatkit)
+  Using cached requests-2.32.3-py3-none-any.whl.metadata (4.6 kB)
+Collecting Flask (from pywhatkit)
+  Using cached flask-3.1.1-py3-none-any.whl.metadata (3.0 kB)
+Collecting beautifulsoup4 (from wikipedia)
+  Using cached beautifulsoup4-4.13.4-py3-none-any.whl.metadata (3.8 kB)
+Collecting charset-normalizer<4,>=2 (from requests->pywhatkit)
+  Downloading charset_normalizer-3.4.2-cp312-cp312-win_amd64.whl.metadata (36 kB)
+Collecting idna<4,>=2.5 (from requests->pywhatkit)
+  Using cached idna-3.10-py3-none-any.whl.metadata (10 kB)
+Collecting urllib3<3,>=1.21.1 (from requests->pywhatkit)
+  Using cached urllib3-2.4.0-py3-none-any.whl.metadata (6.5 kB)
+Collecting certifi>=2017.4.17 (from requests->pywhatkit)
+  Using cached certifi-2025.4.26-py3-none-any.whl.metadata (2.5 kB)
+Collecting numpy>=1.21.2 (from opencv-python)
+  Downloading numpy-2.2.6-cp312-cp312-win_amd64.whl.metadata (60 kB)
+Collecting face-recognition-models>=0.3.0 (from face_recognition)
+  Using cached face_recognition_models-0.3.0.tar.gz (100.1 MB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+Collecting Click>=6.0 (from face_recognition)
+  Using cached click-8.2.1-py3-none-any.whl.metadata (2.5 kB)
+Collecting filelock (from transformers)
+  Using cached filelock-3.18.0-py3-none-any.whl.metadata (2.9 kB)
+Collecting huggingface-hub<1.0,>=0.30.0 (from transformers)
+  Using cached huggingface_hub-0.32.0-py3-none-any.whl.metadata (14 kB)
+Collecting packaging>=20.0 (from transformers)
+  Using cached packaging-25.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting pyyaml>=5.1 (from transformers)
+  Downloading PyYAML-6.0.2-cp312-cp312-win_amd64.whl.metadata (2.1 kB)
+Collecting regex!=2019.12.17 (from transformers)
+  Downloading regex-2024.11.6-cp312-cp312-win_amd64.whl.metadata (41 kB)
+Collecting tokenizers<0.22,>=0.21 (from transformers)
+  Using cached tokenizers-0.21.1-cp39-abi3-win_amd64.whl.metadata (6.9 kB)
+Collecting safetensors>=0.4.3 (from transformers)
+  Using cached safetensors-0.5.3-cp38-abi3-win_amd64.whl.metadata (3.9 kB)
+Collecting tqdm>=4.27 (from transformers)
+  Using cached tqdm-4.67.1-py3-none-any.whl.metadata (57 kB)
+Collecting fsspec>=2023.5.0 (from huggingface-hub<1.0,>=0.30.0->transformers)
+  Using cached fsspec-2025.5.1-py3-none-any.whl.metadata (11 kB)
+Collecting sympy>=1.13.3 (from torch)
+  Using cached sympy-1.14.0-py3-none-any.whl.metadata (12 kB)
+Collecting networkx (from torch)
+  Using cached networkx-3.4.2-py3-none-any.whl.metadata (6.3 kB)
+Collecting jinja2 (from torch)
+  Using cached jinja2-3.1.6-py3-none-any.whl.metadata (2.9 kB)
+Collecting setuptools (from torch)
+  Using cached setuptools-80.8.0-py3-none-any.whl.metadata (6.6 kB)
+Collecting colorama (from Click>=6.0->face_recognition)
+  Using cached colorama-0.4.6-py2.py3-none-any.whl.metadata (17 kB)
+Collecting mpmath<1.4,>=1.1.0 (from sympy>=1.13.3->torch)
+  Using cached mpmath-1.3.0-py3-none-any.whl.metadata (8.6 kB)
+Collecting soupsieve>1.2 (from beautifulsoup4->wikipedia)
+  Using cached soupsieve-2.7-py3-none-any.whl.metadata (4.6 kB)
+Collecting blinker>=1.9.0 (from Flask->pywhatkit)
+  Using cached blinker-1.9.0-py3-none-any.whl.metadata (1.6 kB)
+Collecting itsdangerous>=2.2.0 (from Flask->pywhatkit)
+  Using cached itsdangerous-2.2.0-py3-none-any.whl.metadata (1.9 kB)
+Collecting markupsafe>=2.1.1 (from Flask->pywhatkit)
+  Downloading MarkupSafe-3.0.2-cp312-cp312-win_amd64.whl.metadata (4.1 kB)
+Collecting werkzeug>=3.1.0 (from Flask->pywhatkit)
+  Using cached werkzeug-3.1.3-py3-none-any.whl.metadata (3.7 kB)
+Collecting pymsgbox (from pyautogui->pywhatkit)
+  Using cached PyMsgBox-1.0.9.tar.gz (18 kB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+Collecting pytweening>=1.0.4 (from pyautogui->pywhatkit)
+  Using cached pytweening-1.2.0.tar.gz (171 kB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+Collecting pyscreeze>=0.1.21 (from pyautogui->pywhatkit)
+  Using cached pyscreeze-1.0.1.tar.gz (27 kB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+Collecting pygetwindow>=0.0.5 (from pyautogui->pywhatkit)
+  Using cached PyGetWindow-0.0.9.tar.gz (9.7 kB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+Collecting mouseinfo (from pyautogui->pywhatkit)
+  Using cached MouseInfo-0.1.3.tar.gz (10 kB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+Collecting pyrect (from pygetwindow>=0.0.5->pyautogui->pywhatkit)
+  Using cached PyRect-0.2.0.tar.gz (17 kB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+Collecting pyperclip (from mouseinfo->pyautogui->pywhatkit)
+  Using cached pyperclip-1.9.0.tar.gz (20 kB)
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+  Preparing metadata (pyproject.toml) ... done
+Downloading pygame-2.6.1-cp312-cp312-win_amd64.whl (10.6 MB)
+   ---------------------------------------- 10.6/10.6 MB 4.3 MB/s eta 0:00:00
+Using cached speechrecognition-3.14.3-py3-none-any.whl (32.9 MB)
+Using cached pyttsx3-2.98-py3-none-any.whl (34 kB)
+Using cached pywhatkit-5.4-py3-none-any.whl (15 kB)
+Using cached requests-2.32.3-py3-none-any.whl (64 kB)
+Downloading charset_normalizer-3.4.2-cp312-cp312-win_amd64.whl (105 kB)
+Using cached idna-3.10-py3-none-any.whl (70 kB)
+Using cached urllib3-2.4.0-py3-none-any.whl (128 kB)
+Using cached pyjokes-0.8.3-py3-none-any.whl (47 kB)
+Using cached opencv_python-4.11.0.86-cp37-abi3-win_amd64.whl (39.5 MB)
+Using cached face_recognition-1.3.0-py2.py3-none-any.whl (15 kB)
+Using cached transformers-4.52.3-py3-none-any.whl (10.5 MB)
+Using cached huggingface_hub-0.32.0-py3-none-any.whl (509 kB)
+Using cached tokenizers-0.21.1-cp39-abi3-win_amd64.whl (2.4 MB)
+Downloading torch-2.7.0-cp312-cp312-win_amd64.whl (212.5 MB)
+   ---------------------------------------- 212.5/212.5 MB 3.2 MB/s eta 0:00:00
+Using cached certifi-2025.4.26-py3-none-any.whl (159 kB)
+Using cached click-8.2.1-py3-none-any.whl (102 kB)
+Using cached fsspec-2025.5.1-py3-none-any.whl (199 kB)
+Downloading numpy-2.2.6-cp312-cp312-win_amd64.whl (12.6 MB)
+   ---------------------------------------- 12.6/12.6 MB 3.8 MB/s eta 0:00:00
+Using cached packaging-25.0-py3-none-any.whl (66 kB)
+Downloading PyYAML-6.0.2-cp312-cp312-win_amd64.whl (156 kB)
+Downloading regex-2024.11.6-cp312-cp312-win_amd64.whl (273 kB)
+Using cached safetensors-0.5.3-cp38-abi3-win_amd64.whl (308 kB)
+Using cached sympy-1.14.0-py3-none-any.whl (6.3 MB)
+Using cached mpmath-1.3.0-py3-none-any.whl (536 kB)
+Using cached tqdm-4.67.1-py3-none-any.whl (78 kB)
+Using cached typing_extensions-4.13.2-py3-none-any.whl (45 kB)
+Using cached beautifulsoup4-4.13.4-py3-none-any.whl (187 kB)
+Using cached soupsieve-2.7-py3-none-any.whl (36 kB)
+Using cached colorama-0.4.6-py2.py3-none-any.whl (25 kB)
+Using cached comtypes-1.4.11-py3-none-any.whl (246 kB)
+Using cached filelock-3.18.0-py3-none-any.whl (16 kB)
+Using cached flask-3.1.1-py3-none-any.whl (103 kB)
+Using cached blinker-1.9.0-py3-none-any.whl (8.5 kB)
+Using cached itsdangerous-2.2.0-py3-none-any.whl (16 kB)
+Using cached jinja2-3.1.6-py3-none-any.whl (134 kB)
+Downloading MarkupSafe-3.0.2-cp312-cp312-win_amd64.whl (15 kB)
+Using cached werkzeug-3.1.3-py3-none-any.whl (224 kB)
+Using cached networkx-3.4.2-py3-none-any.whl (1.7 MB)
+Downloading pillow-11.2.1-cp312-cp312-win_amd64.whl (2.7 MB)
+   ---------------------------------------- 2.7/2.7 MB 3.8 MB/s eta 0:00:00
+Using cached pypiwin32-223-py3-none-any.whl (1.7 kB)
+Downloading pywin32-310-cp312-cp312-win_amd64.whl (9.5 MB)
+   ---------------------------------------- 9.5/9.5 MB 3.3 MB/s eta 0:00:00
+Using cached setuptools-80.8.0-py3-none-any.whl (1.2 MB)
+Building wheels for collected packages: wikipedia, dlib, face-recognition-models, pyautogui, pygetwindow, pyscreeze, pytweening, mouseinfo, pymsgbox, pyperclip, pyrect
+  Building wheel for wikipedia (pyproject.toml) ... done
+  Created wheel for wikipedia: filename=wikipedia-1.4.0-py3-none-any.whl size=11784 sha256=4b4060c7a516e90ad1c244348ec32693969da9e8603d6bdd75a702c2cbe17d03
+  Stored in directory: c:\users\lavan\appdata\local\pip\cache\wheels\63\47\7c\a9688349aa74d228ce0a9023229c6c0ac52ca2a40fe87679b8
+  Building wheel for dlib (pyproject.toml) ... done
+  Created wheel for dlib: filename=dlib-19.24.9-cp312-cp312-win_amd64.whl size=2927244 sha256=c8692677df7a995d34517e4aa4e6742149febb569b0b9cc8515dd8fef19cb595
+  Stored in directory: c:\users\lavan\appdata\local\pip\cache\wheels\3e\dd\f4\4d31a74848ef1c9cfd1857a5c43d1fa226d5ad0c7340dc34df
+  Building wheel for face-recognition-models (pyproject.toml) ... done
+  Created wheel for face-recognition-models: filename=face_recognition_models-0.3.0-py2.py3-none-any.whl size=100566257 sha256=1307ce54a5b869ae53cbed4c443b226f0c6cb1316208865716311aa69f54c64a
+  Stored in directory: c:\users\lavan\appdata\local\pip\cache\wheels\8f\47\c8\f44c5aebb7507f7c8a2c0bd23151d732d0f0bd6884ad4ac635
+  Building wheel for pyautogui (pyproject.toml) ... done
+  Created wheel for pyautogui: filename=pyautogui-0.9.54-py3-none-any.whl size=37705 sha256=0ffd338520d690836297b9e052ad237123cc4889e38eb37b7de5cb88fa27dd75
+  Stored in directory: c:\users\lavan\appdata\local\pip\cache\wheels\d9\d6\47\04075995b093ecc87c212c9a3dbd34e59456c6fe504d65c3e4
+  Building wheel for pygetwindow (pyproject.toml) ... done
+  Created wheel for pygetwindow: filename=pygetwindow-0.0.9-py3-none-any.whl size=11135 sha256=75ddb757a1847475a409c98804b01404acc63d81d34f863582ba970f0c2e27c4
+  Stored in directory: c:\users\lavan\appdata\local\pip\cache\wheels\b3\39\81\34dd7a2eca5f885f1f6e2796761970daf66a2d98ac1904f5f4
+  Building wheel for pyscreeze (pyproject.toml) ... done
+  Created wheel for pyscreeze: filename=pyscreeze-1.0.1-py3-none-any.whl size=14477 sha256=bdd39c0357e6cde6f4337a934e86cead36474ed8becb7bc8a91f0cc993e6b59e
+  Stored in directory: c:\users\lavan\appdata\local\pip\cache\wheels\cd\3a\c2\7f2839239a069aa3c9564f6777cbb29d733720ef673f104f0d
+  Building wheel for pytweening (pyproject.toml) ... done
+  Created wheel for pytweening: filename=pytweening-1.2.0-py3-none-any.whl size=8134 sha256=ce3c48a93b484ddc4ad2433c8a5efcbb807b17088dd975a1c2dd39674269f5dd
+  Stored in directory: c:\users\lavan\appdata\local\pip\cache\wheels\23\d5\13\4e9bdadbfe3c78e47c675e7410c0eed2fbb63c5ea6cf1b40e7
+  Building wheel for mouseinfo (pyproject.toml) ... done
+  Created wheel for mouseinfo: filename=mouseinfo-0.1.3-py3-none-any.whl size=10965 sha256=8d8d42ecca3a802b826f5b9f5870e3cfb01a31c62e49e9b976bf509eb8ea985d
+  Stored in directory: c:\users\lavan\appdata\local\pip\cache\wheels\b1\9b\f3\08650eb7f00af32f07789f3c6a101e0d7fc762b9891ae843bb
+  Building wheel for pymsgbox (pyproject.toml) ... done
+  Created wheel for pymsgbox: filename=pymsgbox-1.0.9-py3-none-any.whl size=7466 sha256=797092af45cbd34bfdf7378e64bf955d9ccce75d25d7f5a971adf113d977595b
+  Stored in directory: c:\users\lavan\appdata\local\pip\cache\wheels\55\e7\aa\239163543708d1e15c3d9a1b89dbfe3954b0929a6df2951b83
+  Building wheel for pyperclip (pyproject.toml) ... done
+  Created wheel for pyperclip: filename=pyperclip-1.9.0-py3-none-any.whl size=11114 sha256=e3bf6f5b44d06816047fe43ee71a9a759d0b89bc2f06fd29746befbc23f68404
+  Stored in directory: c:\users\lavan\appdata\local\pip\cache\wheels\e0\e8\fc\8ab8aa326e33bc066ccd5f3ca9646eab4299881af933f94f09
+  Building wheel for pyrect (pyproject.toml) ... done
+  Created wheel for pyrect: filename=pyrect-0.2.0-py2.py3-none-any.whl size=11306 sha256=a3a3a900d7021436897626831dde343e51bbc10c595a056798b5f23193b6a38f
+  Stored in directory: c:\users\lavan\appdata\local\pip\cache\wheels\0b\1e\d7\0c74bd8f60b39c14d84e307398786002aa7ddc905927cc03c5
+Successfully built wikipedia dlib face-recognition-models pyautogui pygetwindow pyscreeze pytweening mouseinfo pymsgbox pyperclip pyrect
+Installing collected packages: pywin32, pytweening, pyscreeze, pyrect, pyperclip, pymsgbox, mpmath, face-recognition-models, dlib, urllib3, typing-extensions, sympy, soupsieve, setuptools, safetensors, regex, pyyaml, pypiwin32, pyjokes, pygetwindow, pygame, Pillow, packaging, numpy, networkx, mouseinfo, markupsafe, itsdangerous, idna, fsspec, filelock, comtypes, colorama, charset-normalizer, certifi, blinker, werkzeug, tqdm, SpeechRecognition, requests, pyttsx3, pyautogui, opencv-python, jinja2, Click, beautifulsoup4, wikipedia, torch, huggingface-hub, Flask, face_recognition, tokenizers, pywhatkit, transformers
+Successfully installed Click-8.2.1 Flask-3.1.1 Pillow-11.2.1 SpeechRecognition-3.14.3 beautifulsoup4-4.13.4 blinker-1.9.0 certifi-2025.4.26 charset-normalizer-3.4.2 colorama-0.4.6 comtypes-1.4.11 dlib-19.24.9 face-recognition-models-0.3.0 face_recognition-1.3.0 filelock-3.18.0 fsspec-2025.5.1 huggingface-hub-0.32.0 idna-3.10 itsdangerous-2.2.0 jinja2-3.1.6 markupsafe-3.0.2 mouseinfo-0.1.3 mpmath-1.3.0 networkx-3.4.2 numpy-2.2.6 opencv-python-4.11.0.86 packaging-25.0 pyautogui-0.9.54 pygame-2.6.1 pygetwindow-0.0.9 pyjokes-0.8.3 pymsgbox-1.0.9 pyperclip-1.9.0 pypiwin32-223 pyrect-0.2.0 pyscreeze-1.0.1 pyttsx3-2.98 pytweening-1.2.0 pywhatkit-5.4 pywin32-310 pyyaml-6.0.2 regex-2024.11.6 requests-2.32.3 safetensors-0.5.3 setuptools-80.8.0 soupsieve-2.7 sympy-1.14.0 tokenizers-0.21.1 torch-2.7.0 tqdm-4.67.1 transformers-4.52.3 typing-extensions-4.13.2 urllib3-2.4.0 werkzeug-3.1.3 wikipedia-1.4.0
+
+(.venv_robot) C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>pip install pygame speech_recognition pyttsx3 pywhatkit wikipedia pyjokes opencv-python face_recognition dlib transformers torch
+Requirement already satisfied: pygame in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (2.6.1)
+ERROR: Could not find a version that satisfies the requirement speech_recognition (from versions: none)
+ERROR: No matching distribution found for speech_recognition
+
+(.venv_robot) C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>pip install pygame SpeechRecognition pyttsx3 pywhatkit wikipedia pyjokes opencv-python face_recognition dlib transformers torch
+Requirement already satisfied: pygame in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (2.6.1)
+Requirement already satisfied: SpeechRecognition in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (3.14.3)
+Requirement already satisfied: pyttsx3 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (2.98)
+Requirement already satisfied: pywhatkit in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (5.4)
+Requirement already satisfied: wikipedia in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (1.4.0)
+Requirement already satisfied: pyjokes in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (0.8.3)
+Requirement already satisfied: opencv-python in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (4.11.0.86)
+Requirement already satisfied: face_recognition in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (1.3.0)
+Requirement already satisfied: dlib in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (19.24.9)
+Requirement already satisfied: transformers in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (4.52.3)
+Requirement already satisfied: torch in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (2.7.0)
+Requirement already satisfied: typing-extensions in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from SpeechRecognition) (4.13.2)
+Requirement already satisfied: comtypes in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pyttsx3) (1.4.11)
+Requirement already satisfied: pypiwin32 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pyttsx3) (223)
+Requirement already satisfied: pywin32 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pyttsx3) (310)
+Requirement already satisfied: Pillow in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pywhatkit) (11.2.1)
+Requirement already satisfied: pyautogui in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pywhatkit) (0.9.54)
+Requirement already satisfied: requests in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pywhatkit) (2.32.3)
+Requirement already satisfied: Flask in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pywhatkit) (3.1.1)
+Requirement already satisfied: beautifulsoup4 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from wikipedia) (4.13.4)
+Requirement already satisfied: charset-normalizer<4,>=2 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from requests->pywhatkit) (3.4.2)
+Requirement already satisfied: idna<4,>=2.5 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from requests->pywhatkit) (3.10)
+Requirement already satisfied: urllib3<3,>=1.21.1 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from requests->pywhatkit) (2.4.0)
+Requirement already satisfied: certifi>=2017.4.17 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from requests->pywhatkit) (2025.4.26)
+Requirement already satisfied: numpy>=1.21.2 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from opencv-python) (2.2.6)
+Requirement already satisfied: face-recognition-models>=0.3.0 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from face_recognition) (0.3.0)
+Requirement already satisfied: Click>=6.0 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from face_recognition) (8.2.1)
+Requirement already satisfied: filelock in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from transformers) (3.18.0)
+Requirement already satisfied: huggingface-hub<1.0,>=0.30.0 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from transformers) (0.32.0)
+Requirement already satisfied: packaging>=20.0 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from transformers) (25.0)
+Requirement already satisfied: pyyaml>=5.1 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from transformers) (6.0.2)
+Requirement already satisfied: regex!=2019.12.17 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from transformers) (2024.11.6)
+Requirement already satisfied: tokenizers<0.22,>=0.21 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from transformers) (0.21.1)
+Requirement already satisfied: safetensors>=0.4.3 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from transformers) (0.5.3)
+Requirement already satisfied: tqdm>=4.27 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from transformers) (4.67.1)
+Requirement already satisfied: fsspec>=2023.5.0 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from huggingface-hub<1.0,>=0.30.0->transformers) (2025.5.1)
+Requirement already satisfied: sympy>=1.13.3 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from torch) (1.14.0)
+Requirement already satisfied: networkx in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from torch) (3.4.2)
+Requirement already satisfied: jinja2 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from torch) (3.1.6)
+Requirement already satisfied: setuptools in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from torch) (80.8.0)
+Requirement already satisfied: colorama in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from Click>=6.0->face_recognition) (0.4.6)
+Requirement already satisfied: mpmath<1.4,>=1.1.0 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from sympy>=1.13.3->torch) (1.3.0)
+Requirement already satisfied: soupsieve>1.2 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from beautifulsoup4->wikipedia) (2.7)
+Requirement already satisfied: blinker>=1.9.0 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from Flask->pywhatkit) (1.9.0)
+Requirement already satisfied: itsdangerous>=2.2.0 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from Flask->pywhatkit) (2.2.0)
+Requirement already satisfied: markupsafe>=2.1.1 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from Flask->pywhatkit) (3.0.2)
+Requirement already satisfied: werkzeug>=3.1.0 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from Flask->pywhatkit) (3.1.3)
+Requirement already satisfied: pymsgbox in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pyautogui->pywhatkit) (1.0.9)
+Requirement already satisfied: pytweening>=1.0.4 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pyautogui->pywhatkit) (1.2.0)
+Requirement already satisfied: pyscreeze>=0.1.21 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pyautogui->pywhatkit) (1.0.1)
+Requirement already satisfied: pygetwindow>=0.0.5 in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pyautogui->pywhatkit) (0.0.9)
+Requirement already satisfied: mouseinfo in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pyautogui->pywhatkit) (0.1.3)
+Requirement already satisfied: pyrect in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from pygetwindow>=0.0.5->pyautogui->pywhatkit) (0.2.0)
+Requirement already satisfied: pyperclip in c:\users\lavan\onedrive\desktop\virtualhumanoid\.venv_robot\lib\site-packages (from mouseinfo->pyautogui->pywhatkit) (1.9.0)
+
+(.venv_robot) C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>python robot.py
+pygame 2.6.1 (SDL 2.28.4, Python 3.12.5)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+==================================================
+WARNING: `transformers` library not found. Local AI model will not be available.
+Please install it: pip install transformers torch
+ (For GPU, install PyTorch with CUDA: e.g., pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 )
+==================================================
+Main App: Loki Voice Assistant with GUI starting...
+Main App: Launching Robot Logic Thread...
+Robot Thread: Initializing assistant logic...
+Main App: Initializing and running Robot Face GUI...
+Robot Warning: Local AI (transformers library) is not installed. General conversation is disabled.
+Robot Log: Loading known faces from known_faces/...
+Robot Log: Loaded face - Ajay
+Robot Log: Loaded face - Amar
+Robot Log: Loaded face - Checkin
+Robot Log: Loaded face - Sai
+Robot Log: Loaded face - Varun
+Robot Log: Loaded 5 known faces.
+Robot Log: Face recognition cam... (CV2 window, 'q' to skip)
+🤖 Bot: Hello Sai, it's great to see your face!
+Robot Log: Critical listening error (e.g., no microphone?): Could not find PyAudio; check installation
+🤖 Bot: I'm having trouble with my microphone input right now.
+Robot Log: Critical listening error (e.g., no microphone?): Could not find PyAudio; check installation
+🤖 Bot: I'm having trouble with my microphone input right now.
+Robot Log: Critical listening error (e.g., no microphone?): Could not find PyAudio; check installation
+🤖 Bot: I'm having trouble with my microphone input right now.
+Robot Log: Critical listening error (e.g., no microphone?): Could not find PyAudio; check installation
+🤖 Bot: I'm having trouble with my microphone input right now.
+Robot Log: Critical listening error (e.g., no microphone?): Could not find PyAudio; check installation
+🤖 Bot: I'm having trouble with my microphone input right now.
+Robot Log: Critical listening error (e.g., no microphone?): Could not find PyAudio; check installation
+🤖 Bot: I'm having trouble with my microphone input right now.
+Main App: GUI loop has finished or an error occurred.
+Main App: Signaling robot logic thread to stop...
+Main App: Waiting for robot logic thread to join...
+Main App: Robot logic thread did not shut down cleanly (timed out).
+Main App: Application shutdown complete.
+Traceback (most recent call last):
+  File "C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid\robot.py", line 529, in <module>
+    gui_instance.run_gui_loop() # This is blocking; runs until GUI window is closed
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid\gui.py", line 528, in run_gui_loop
+    self.clock.tick(FPS_GUI)
+KeyboardInterrupt
+^C
+(.venv_robot) C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>cpython -m pip show transformers
+'cpython' is not recognized as an internal or external command,
+operable program or batch file.
+
+(.venv_robot) C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>python -m pip show transformers
+Name: transformers
+Version: 4.52.3
+Summary: State-of-the-art Machine Learning for JAX, PyTorch and TensorFlow
+Home-page: https://github.com/huggingface/transformers
+Author: The Hugging Face team (past and future) with the help of all our contributors (https://github.com/huggingface/transformers/graphs/contributors)
+Author-email: transformers@huggingface.co
+License: Apache 2.0 License
+Location: C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid\.venv_robot\Lib\site-packages
+Requires: filelock, huggingface-hub, numpy, packaging, pyyaml, regex, requests, safetensors, tokenizers, tqdm
+Required-by:
+
+(.venv_robot) C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>python -m pip show torch
+Name: torch
+Version: 2.7.0
+Summary: Tensors and Dynamic neural networks in Python with strong GPU acceleration
+Home-page: https://pytorch.org/
+Author: PyTorch Team
+Author-email: packages@pytorch.org
+License: BSD-3-Clause
+Location: C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid\.venv_robot\Lib\site-packages
+Requires: filelock, fsspec, jinja2, networkx, setuptools, sympy, typing-extensions
+Required-by:
+
+(.venv_robot) C:\Users\lavan\OneDrive\Desktop\VirtualHumanoid>python
+Python 3.12.5 (tags/v3.12.5:ff3bc82, Aug  6 2024, 20:45:27) [MSC v.1940 64 bit (AMD64)] on win32
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import transformers
+>>>
+>>> print(transformers.__version__)
+4.52.3
+>>> import transformers
+>>>
