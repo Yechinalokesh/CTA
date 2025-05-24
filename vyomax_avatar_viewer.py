@@ -1,403 +1,551 @@
-import pygame
-import math
+# robot.py (Final Version based on discussions)
+
+import speech_recognition as sr
+import pyttsx3
+# import openai # No longer primary for AI if using local model
+import webbrowser
+import pywhatkit
+import datetime
+import wikipedia
+import pyjokes
+import os
+import cv2
+import face_recognition # Depends on dlib
+import numpy as np
+
+# --- New Imports for GUI Integration & Local LLM ---
+import threading
+import queue
 import time
-import random
+import traceback # For printing full tracebacks in threads
 
-# --- Constants ---
-SCREEN_WIDTH = 0
-SCREEN_HEIGHT = 0
-FPS = 30
+# --- Import your GUI class ---
+try:
+    from gui import RobotFaceGUI # From your new gui.py file
+except ImportError as e:
+    print(f"CRITICAL ERROR: Could not import RobotFaceGUI from gui.py: {e}")
+    print("Please ensure gui.py exists in the same directory and has no errors.")
+    exit() # Cannot proceed without the GUI component
 
-# Colors - Vector/Digital Style
-DIGITAL_BLACK = (15, 18, 22)
-SCREEN_BLUE_BG = (30, 40, 60)
-CYBER_BLUE = (0, 200, 255)
-ENERGY_GREEN = (20, 255, 100)
-WARNING_RED = (255, 50, 50)
-DATA_YELLOW = (255, 220, 0)
-WHITE_HIGHLIGHT = (240, 240, 255)
-ROBOT_BODY_LIGHT_GRAY = (200, 205, 210)
-ROBOT_BODY_DARK_GRAY = (100, 105, 110)
-HEART_PINK = (255, 105, 180)
-
-DEFAULT_FEATURE_COLOR = CYBER_BLUE
-HAND_COLOR = ROBOT_BODY_LIGHT_GRAY
-EYEBALL_COLOR = WHITE_HIGHLIGHT
-
-# --- Face & Hand States ---
-# Facial States
-STATE_OFFLINE = "offline"; STATE_ENTERING = "entering"; STATE_IDLE = "idle"
-STATE_TALKING = "talking"; STATE_HAPPY = "happy"; STATE_LAUGHING = "laughing"
-STATE_THINKING = "thinking"; STATE_SLEEPING = "sleeping"; STATE_SAD = "sad"
-STATE_ANGRY = "angry"; STATE_SURPRISED = "surprised"; STATE_CONFUSED = "confused"
-STATE_LISTENING = "listening"; STATE_WINKING = "winking"; STATE_CURIOUS = "curious"
-STATE_EMBARRASSED = "embarrassed"; STATE_SCHEMING = "scheming"; STATE_BORED = "bored"
-STATE_PROUD = "proud"; STATE_PROCESSING = "processing"
-
-# Hand States
-HAND_STATE_NONE = "none"; HAND_STATE_SALUTE = "salute"; HAND_STATE_WAVE_HIGH = "wave_high"
-HAND_STATE_WAVE_MID = "wave_mid"; HAND_STATE_THUMBS_UP = "thumbs_up"
-HAND_STATE_POINTING_LEFT = "pointing_left"; HAND_STATE_POINTING_RIGHT = "pointing_right"
-HAND_STATE_THINKING_CHIN = "thinking_chin"; HAND_STATE_SHRUG = "shrug" # Both hands up
-HAND_STATE_HEART_LEFT = "heart_left"; HAND_STATE_HEART_RIGHT = "heart_right"
-HAND_STATE_FACEPALM = "facepalm"; HAND_STATE_OPEN_PALM_UP = "open_palm_up" # For shrug or offering
-HAND_STATE_FIST = "fist"
-
-# --- PyGame Setup ---
-pygame.init()
-infoObject = pygame.display.Info()
-SCREEN_WIDTH = infoObject.current_w
-SCREEN_HEIGHT = infoObject.current_h
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN) # | pygame.SCALED if issues with fullscreen resolution
-pygame.display.set_caption("Pop-Up Vector AI Robot (Autonomous)")
-clock = pygame.time.Clock()
-font_size = SCREEN_HEIGHT // 28
-font = pygame.font.Font(None, font_size)
-small_font_size = SCREEN_HEIGHT // 38
-small_font = pygame.font.Font(None, small_font_size)
-
-# --- Face & Body Parameters (Scaled) ---
-FACE_CENTER_X = SCREEN_WIDTH // 2
-HEAD_REST_Y = SCREEN_HEIGHT // 2 - int(50 * (SCREEN_HEIGHT / 700.0)) # Slightly higher rest
-HEAD_START_Y = SCREEN_HEIGHT + int(SCREEN_HEIGHT * 0.3)
-head_current_y = HEAD_START_Y
-
-SCALE_FACTOR = SCREEN_HEIGHT / 700.0
-
-HEAD_WIDTH = int(220 * SCALE_FACTOR); HEAD_HEIGHT = int(200 * SCALE_FACTOR)
-HEAD_CORNER_RADIUS = int(40 * SCALE_FACTOR); HEAD_OUTLINE_THICKNESS = max(2, int(8 * SCALE_FACTOR))
-ANTENNA_LENGTH = int(30 * SCALE_FACTOR); ANTENNA_BALL_RADIUS = int(8 * SCALE_FACTOR)
-
-EYE_OFFSET_X = int(55 * SCALE_FACTOR); EYE_OFFSET_Y_FROM_HEAD_TOP = int(70 * SCALE_FACTOR)
-EYE_WIDTH = int(45 * SCALE_FACTOR); EYE_HEIGHT = int(60 * SCALE_FACTOR)
-EYE_THICKNESS = max(2, int(5 * SCALE_FACTOR)); PUPIL_SIZE = int(12 * SCALE_FACTOR)
-
-EYEBROW_OFFSET_Y_FROM_EYE_TOP = int(-25 * SCALE_FACTOR); EYEBROW_LENGTH = int(60 * SCALE_FACTOR)
-EYEBROW_THICKNESS = max(2, int(7 * SCALE_FACTOR))
-
-MOUTH_Y_OFFSET_FROM_HEAD_CENTER = int(50 * SCALE_FACTOR); MOUTH_WIDTH_MAX = int(100 * SCALE_FACTOR)
-MOUTH_SEGMENT_HEIGHT = max(2, int(5 * SCALE_FACTOR)); MOUTH_NUM_SEGMENTS = 5
-MOUTH_THICKNESS = max(2, int(5 * SCALE_FACTOR))
-
-HAND_SIZE_W = int(45 * SCALE_FACTOR); HAND_SIZE_H = int(60 * SCALE_FACTOR)
-HAND_OFFSET_X_FROM_HEAD = int(HEAD_WIDTH * 0.70)
-HAND_OFFSET_Y_FROM_HEAD_CENTER = int(HEAD_HEIGHT * 0.05)
-HAND_THICKNESS = max(2, int(5 * SCALE_FACTOR))
-
-# --- Animation Variables ---
-current_facial_state = STATE_OFFLINE; current_left_hand_state = HAND_STATE_NONE
-current_right_hand_state = HAND_STATE_NONE; current_face_color = DEFAULT_FEATURE_COLOR
-pop_up_speed = 0.07; head_is_active = False
-talk_anim_speed = 0.10; last_talk_anim_time = 0; talk_cycle_count = 0
-blink_interval = random.uniform(3.0, 6.0); next_blink_time = time.time() + blink_interval
-blink_duration = 0.10; is_blinking = False; blink_end_time = 0
-wave_angle = 0; wave_direction = 1; wave_speed = 5
-head_current_center_x = FACE_CENTER_X; head_current_center_y = head_current_y
+# --- Import for Hugging Face Local LLM ---
+try:
+    from transformers import pipeline, Conversation
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    print("="*50)
+    print("WARNING: `transformers` library not found. Local AI model will not be available.")
+    print("Please install it: pip install transformers torch")
+    print(" (For GPU, install PyTorch with CUDA: e.g., pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 )")
+    print("="*50)
+    TRANSFORMERS_AVAILABLE = False
 
 
-def get_feature_color(state):
-    if state == STATE_ANGRY or state == STATE_PROCESSING: return WARNING_RED
-    if state == STATE_HAPPY or state == STATE_LAUGHING: return ENERGY_GREEN
-    if state == STATE_SAD: return pygame.Color(CYBER_BLUE[0]//2, CYBER_BLUE[1]//2, CYBER_BLUE[2]//2) # Dimmer blue
-    if state == STATE_OFFLINE: return ROBOT_BODY_DARK_GRAY
-    return current_face_color
+# --- Expression Constants (ensure these match gui.py) ---
+EXPR_NEUTRAL = "neutral"; EXPR_LISTENING = "listening"; EXPR_THINKING = "thinking"
+EXPR_TALKING = "talking"; EXPR_HAPPY = "happy"; EXPR_SAD = "sad"; EXPR_ANGRY = "angry"
+EXPR_LAUGHING = "laughing"; EXPR_LOVELY = "lovely"; EXPR_KISSING_HEART = "kissing_heart"
+EXPR_SHYING = "shying"; EXPR_PROCESSING = "processing"; EXPR_CONCERNED = "concerned"
+EXPR_SMILING = "smiling"; EXPR_SLEEPY = "sleepy"
 
-def draw_rounded_rect(surface, rect_in, color, corner_radius, thickness=0, filled=True):
-    rect = pygame.Rect(rect_in) # Work with a copy
-    if corner_radius < 0: corner_radius = 0
-    if corner_radius > rect.width / 2: corner_radius = rect.width / 2
-    if corner_radius > rect.height / 2: corner_radius = rect.height / 2
-    
-    if filled and thickness == 0: # Filled rounded rect
-        pygame.draw.circle(surface, color, (rect.left + corner_radius, rect.top + corner_radius), corner_radius)
-        pygame.draw.circle(surface, color, (rect.right - corner_radius - 1, rect.top + corner_radius), corner_radius)
-        pygame.draw.circle(surface, color, (rect.left + corner_radius, rect.bottom - corner_radius - 1), corner_radius)
-        pygame.draw.circle(surface, color, (rect.right - corner_radius - 1, rect.bottom - corner_radius - 1), corner_radius)
-        pygame.draw.rect(surface, color, (rect.left + corner_radius, rect.top, rect.width - 2 * corner_radius, rect.height))
-        pygame.draw.rect(surface, color, (rect.left, rect.top + corner_radius, rect.width, rect.height - 2 * corner_radius))
-    else: # Outline
-        actual_thickness = thickness if thickness > 0 else 1
-        pygame.draw.arc(surface, color, (rect.left, rect.top, corner_radius * 2, corner_radius * 2), math.pi, math.pi * 3/2, actual_thickness)
-        pygame.draw.arc(surface, color, (rect.right - corner_radius * 2, rect.top, corner_radius * 2, corner_radius * 2), math.pi * 3/2, 0, actual_thickness)
-        pygame.draw.arc(surface, color, (rect.left, rect.bottom - corner_radius * 2, corner_radius * 2, corner_radius * 2), math.pi/2, math.pi, actual_thickness)
-        pygame.draw.arc(surface, color, (rect.right - corner_radius * 2, rect.bottom - corner_radius * 2, corner_radius * 2, corner_radius * 2), 0, math.pi/2, actual_thickness)
-        pygame.draw.line(surface, color, (rect.left + corner_radius, rect.top), (rect.right - corner_radius, rect.top), actual_thickness)
-        pygame.draw.line(surface, color, (rect.left + corner_radius, rect.bottom), (rect.right - corner_radius, rect.bottom), actual_thickness)
-        pygame.draw.line(surface, color, (rect.left, rect.top + corner_radius), (rect.left, rect.bottom - corner_radius), actual_thickness)
-        pygame.draw.line(surface, color, (rect.right, rect.top + corner_radius), (rect.right, rect.bottom - corner_radius), actual_thickness)
 
-def draw_head_shape_and_antennae(hcx, hcy, feature_color):
-    head_r = pygame.Rect(hcx - HEAD_WIDTH // 2, hcy - HEAD_HEIGHT // 2, HEAD_WIDTH, HEAD_HEIGHT)
-    draw_rounded_rect(screen, head_r, ROBOT_BODY_LIGHT_GRAY, HEAD_CORNER_RADIUS, HEAD_OUTLINE_THICKNESS, filled=False)
-    screen_r = head_r.inflate(-HEAD_OUTLINE_THICKNESS*2, -HEAD_OUTLINE_THICKNESS*2)
-    if screen_r.width > 0 and screen_r.height > 0:
-        draw_rounded_rect(screen, screen_r, SCREEN_BLUE_BG, HEAD_CORNER_RADIUS - HEAD_OUTLINE_THICKNESS, 0, filled=True)
-    ant_b_y = head_r.top; ant_l_x = head_r.left + HEAD_WIDTH*0.25; ant_r_x = head_r.right - HEAD_WIDTH*0.25
-    ant_th = max(1, HEAD_OUTLINE_THICKNESS//2)
-    pygame.draw.line(screen, ROBOT_BODY_LIGHT_GRAY, (ant_l_x, ant_b_y), (ant_l_x, ant_b_y - ANTENNA_LENGTH), ant_th)
-    pygame.draw.circle(screen, feature_color, (ant_l_x, ant_b_y - ANTENNA_LENGTH), ANTENNA_BALL_RADIUS)
-    pygame.draw.line(screen, ROBOT_BODY_LIGHT_GRAY, (ant_r_x, ant_b_y), (ant_r_x, ant_b_y - ANTENNA_LENGTH), ant_th)
-    pygame.draw.circle(screen, feature_color, (ant_r_x, ant_b_y - ANTENNA_LENGTH), ANTENNA_BALL_RADIUS)
+# --- Configuration Constants ---
+MEMORY_FILE = "memory.txt"
+FACES_DIR = "known_faces/" # Ensure this directory exists with images
 
-def draw_vector_eyebrows(state, hcx, eye_top_y, color):
-    y_pos = eye_top_y + EYEBROW_OFFSET_Y_FROM_EYE_TOP
-    lx_c = hcx - EYE_OFFSET_X; rx_c = hcx + EYE_OFFSET_X
-    h_len = EYEBROW_LENGTH // 2; ang_r = 0; y_adj_l = 0; y_adj_r = 0
-    if state == STATE_ANGRY: ang_r = math.radians(20)
-    elif state == STATE_SAD: ang_r = math.radians(-20)
-    elif state == STATE_SURPRISED or state == STATE_PROUD: y_adj_l = y_adj_r = -int(10*SCALE_FACTOR)
-    elif state == STATE_CONFUSED or state == STATE_CURIOUS or state == STATE_SCHEMING: y_adj_l = -int(8*SCALE_FACTOR)
-    elif state == STATE_BORED: y_adj_l = y_adj_r = int(3*SCALE_FACTOR)
-    pygame.draw.line(screen,color,(lx_c-h_len,y_pos+y_adj_l-h_len*math.sin(ang_r)),(lx_c+h_len,y_pos+y_adj_l+h_len*math.sin(ang_r)),EYEBROW_THICKNESS)
-    pygame.draw.line(screen,color,(rx_c-h_len,y_pos+y_adj_r+h_len*math.sin(-ang_r)),(rx_c+h_len,y_pos+y_adj_r-h_len*math.sin(-ang_r)),EYEBROW_THICKNESS)
+# --- Global GUI Command Queue ---
+GUI_COMMAND_QUEUE = None # Will be initialized in main
+def set_global_gui_queue(q: queue.Queue):
+    global GUI_COMMAND_QUEUE
+    GUI_COMMAND_QUEUE = q
 
-def _draw_vector_single_eye(ecx, ecy, state, is_wink_eye, is_blinking_now, color):
-    eye_r = pygame.Rect(ecx - EYE_WIDTH // 2, ecy - EYE_HEIGHT // 2, EYE_WIDTH, EYE_HEIGHT)
-    px, py = ecx, ecy
-    if is_blinking_now or (is_wink_eye and state == STATE_WINKING):
-        pygame.draw.line(screen,color,(eye_r.left+EYE_THICKNESS,ecy),(eye_r.right-EYE_THICKNESS,ecy),EYE_HEIGHT//2); return
-    if state == STATE_SLEEPING or state == STATE_OFFLINE:
-        if state == STATE_OFFLINE: pygame.draw.line(screen,color,eye_r.topleft,eye_r.bottomright,EYE_THICKNESS); pygame.draw.line(screen,color,eye_r.bottomleft,eye_r.topright,EYE_THICKNESS)
-        else: pygame.draw.line(screen,color,(eye_r.left,ecy),(eye_r.right,ecy),EYE_THICKNESS*2)
+def send_gui_command(expression: str, message: str = "", type: str = "expression", action: str = None, data: dict = None):
+    """Helper function to send commands to the GUI thread."""
+    if GUI_COMMAND_QUEUE:
+        try:
+            payload = {"type": type, "expression": expression, "message": message}
+            if action: payload["action"] = action
+            if data: payload["data"] = data
+            GUI_COMMAND_QUEUE.put_nowait(payload)
+        except queue.Full:
+            print("Robot Log: GUI command queue is full. Update skipped.")
+        except Exception as e:
+            print(f"Robot Log: Error sending command to GUI: {e}")
+
+# --- Global variables for Face Recognition ---
+KNOWN_FACE_ENCODINGS = []
+KNOWN_FACE_NAMES = []
+
+# --- Initialize TTS engine ---
+engine = pyttsx3.init()
+try:
+    engine.setProperty("rate", 180) # Slightly faster
+    voices = engine.getProperty('voices')
+    if voices and len(voices) > 1:
+        engine.setProperty('voice', voices[1].id) # Typically female voice
+    elif voices:
+        print("Robot Warning: Only one TTS voice found. Using default.")
+    else:
+        print("Robot CRITICAL Warning: No TTS voices found. Speech output will not work.")
+except Exception as e:
+    print(f"Robot Warning: Error setting up TTS engine properties: {e}")
+
+
+# --- Modified Speak function ---
+def speak(text_to_speak: str, expression_during_speech: str = EXPR_TALKING, msg_for_gui: str = None):
+    if not text_to_speak: # Don't try to speak empty strings
+        print("Robot Log: Speak function called with empty text.")
         return
-    eye_pts = [(eye_r.left+EYE_WIDTH*0.1,eye_r.top),(eye_r.right-EYE_WIDTH*0.1,eye_r.top),(eye_r.right,eye_r.top+EYE_HEIGHT*0.1),(eye_r.right,eye_r.bottom-EYE_HEIGHT*0.1),(eye_r.right-EYE_WIDTH*0.1,eye_r.bottom),(eye_r.left+EYE_WIDTH*0.1,eye_r.bottom),(eye_r.left,eye_r.bottom-EYE_HEIGHT*0.1),(eye_r.left,eye_r.top+EYE_HEIGHT*0.1)]
-    pygame.draw.polygon(screen,color,eye_pts,EYE_THICKNESS)
-    pup_s = PUPIL_SIZE
-    if state == STATE_SURPRISED: pup_s = int(PUPIL_SIZE*1.4)
-    elif state == STATE_ANGRY or state == STATE_SCHEMING: pup_s = int(PUPIL_SIZE*0.7)
-    elif state == STATE_SAD or state == STATE_BORED: py += int(6*SCALE_FACTOR)
-    elif state == STATE_EMBARRASSED: py += int(10*SCALE_FACTOR); pup_s = int(PUPIL_SIZE*0.8)
-    elif state == STATE_HAPPY or state == STATE_LAUGHING: py -= int(3*SCALE_FACTOR)
-    elif state == STATE_THINKING or state == STATE_PROCESSING or state == STATE_CURIOUS: px+=random.randint(-int(3*SCALE_FACTOR),int(3*SCALE_FACTOR)); py+=random.randint(-int(3*SCALE_FACTOR),int(3*SCALE_FACTOR))
-    pygame.draw.circle(screen,EYEBALL_COLOR,(px,py),pup_s//2)
-    if state == STATE_PROCESSING:
-        for i in range(eye_r.top,eye_r.bottom,max(3,int(6*SCALE_FACTOR))): pygame.draw.line(screen,(*color[:3],80),(eye_r.left,i),(eye_r.right,i),max(1,int(2*SCALE_FACTOR)))
 
-def draw_vector_eyes(state, blink_active, hcx, head_top_y, color):
-    eye_act_cy = head_top_y + EYE_OFFSET_Y_FROM_HEAD_TOP + EYE_HEIGHT//2
-    lex = hcx - EYE_OFFSET_X; rex = hcx + EYE_OFFSET_X
-    eye_top_y_eb = head_top_y + EYE_OFFSET_Y_FROM_HEAD_TOP
-    _draw_vector_single_eye(lex,eye_act_cy,state,False,blink_active and state!=STATE_WINKING,color)
-    _draw_vector_single_eye(rex,eye_act_cy,state,True,blink_active,color)
-    if state not in [STATE_OFFLINE,STATE_SLEEPING]: draw_vector_eyebrows(state,hcx,eye_top_y_eb,color)
-
-def draw_vector_mouth(state, cycle, hcx, hcy, color):
-    mcx = hcx; my_start = hcy + MOUTH_Y_OFFSET_FROM_HEAD_CENTER
-    if state == STATE_OFFLINE: return
-    if state == STATE_TALKING:
-        num_act_seg = (cycle%(MOUTH_NUM_SEGMENTS//2+2))+MOUTH_NUM_SEGMENTS//3
-        base_sw = MOUTH_WIDTH_MAX*(0.5+(cycle%4)*0.12)
-        for i in range(MOUTH_NUM_SEGMENTS):
-            bar_y = my_start+(i-MOUTH_NUM_SEGMENTS//2)*(MOUTH_SEGMENT_HEIGHT+max(1,int(2*SCALE_FACTOR)))
-            curr_bw = base_sw*(1-abs(i-MOUTH_NUM_SEGMENTS//2)*0.25)
-            curr_bw = max(int(8*SCALE_FACTOR),int(curr_bw))
-            if i < num_act_seg: pygame.draw.line(screen,color,(mcx-curr_bw//2,bar_y),(mcx+curr_bw//2,bar_y),MOUTH_SEGMENT_HEIGHT)
-    elif state in [STATE_IDLE,STATE_LISTENING,STATE_SLEEPING]:
-        lw = MOUTH_WIDTH_MAX*(0.5 if state!=STATE_SLEEPING else 0.3)
-        pygame.draw.line(screen,color,(mcx-lw//2,my_start),(mcx+lw//2,my_start),MOUTH_THICKNESS)
-    elif state in [STATE_HAPPY,STATE_LAUGHING,STATE_PROUD,STATE_WINKING]:
-        r = pygame.Rect(mcx-MOUTH_WIDTH_MAX*0.4,my_start-MOUTH_SEGMENT_HEIGHT,MOUTH_WIDTH_MAX*0.8,MOUTH_SEGMENT_HEIGHT*2.5)
-        pygame.draw.arc(screen,color,r,math.pi*(1.1 if state!=STATE_LAUGHING else 1.0),math.pi*(1.9 if state!=STATE_LAUGHING else 2.0),MOUTH_THICKNESS*2)
-    elif state in [STATE_SAD,STATE_EMBARRASSED]:
-        r = pygame.Rect(mcx-MOUTH_WIDTH_MAX*0.35,my_start,MOUTH_WIDTH_MAX*0.7,MOUTH_SEGMENT_HEIGHT*2)
-        pygame.draw.arc(screen,color,r,math.pi*0.1,math.pi*0.9,MOUTH_THICKNESS*2)
-    elif state in [STATE_SURPRISED,STATE_CONFUSED,STATE_CURIOUS]:
-        pygame.draw.ellipse(screen,color,(mcx-MOUTH_WIDTH_MAX*0.25,my_start-MOUTH_SEGMENT_HEIGHT*1.2,MOUTH_WIDTH_MAX*0.5,MOUTH_SEGMENT_HEIGHT*2.4),MOUTH_THICKNESS*2)
-    elif state in [STATE_ANGRY,STATE_THINKING,STATE_BORED,STATE_PROCESSING,STATE_SCHEMING]:
-        lw = MOUTH_WIDTH_MAX*0.6; y_adj = int(3*SCALE_FACTOR) if state==STATE_SCHEMING else 0
-        pygame.draw.line(screen,color,(mcx-lw//2,my_start+y_adj),(mcx+lw//2,my_start-y_adj),MOUTH_THICKNESS)
-
-def draw_single_hand(hcx, hcy, hand_state, for_left_hand, anim_angle, color):
-    if hand_state == HAND_STATE_NONE: return
-    eff_hcx = hcx + (-HAND_OFFSET_X_FROM_HEAD if for_left_hand else HAND_OFFSET_X_FROM_HEAD)
-    eff_hcy = hcy + HAND_OFFSET_Y_FROM_HEAD_CENTER
-    palm_r = pygame.Rect(eff_hcx-HAND_SIZE_W//2,eff_hcy-HAND_SIZE_H//2,HAND_SIZE_W,HAND_SIZE_H)
-
-    if hand_state in [HAND_STATE_WAVE_HIGH, HAND_STATE_WAVE_MID]:
-        y_pos_w = eff_hcy - (HAND_SIZE_H*0.3 if hand_state==HAND_STATE_WAVE_HIGH else 0)
-        h_surf = pygame.Surface((HAND_SIZE_W,HAND_SIZE_H),pygame.SRCALPHA)
-        draw_rounded_rect(h_surf,h_surf.get_rect(),color,HAND_SIZE_W//4,0)
-        for i in range(4): pygame.draw.line(h_surf,color,(HAND_SIZE_W*0.2+i*HAND_SIZE_W*0.15,HAND_SIZE_H*0.1),(HAND_SIZE_W*0.2+i*HAND_SIZE_W*0.15,-HAND_SIZE_H*0.2),max(1,HAND_THICKNESS//2))
-        rot_h = pygame.transform.rotate(h_surf,anim_angle if for_left_hand else -anim_angle)
-        screen.blit(rot_h,rot_h.get_rect(center=(eff_hcx,y_pos_w)))
-    elif hand_state == HAND_STATE_SALUTE and not for_left_hand: # Salute with right hand
-        sal_palm_pts=[(eff_hcx-HAND_SIZE_W*0.3,eff_hcy-HAND_SIZE_H*0.1),(eff_hcx+HAND_SIZE_W*0.3,eff_hcy-HAND_SIZE_H*0.3),(eff_hcx+HAND_SIZE_W*0.25,eff_hcy+HAND_SIZE_H*0.1),(eff_hcx-HAND_SIZE_W*0.35,eff_hcy+HAND_SIZE_H*0.05)]
-        pygame.draw.polygon(screen,color,sal_palm_pts)
-    elif hand_state == HAND_STATE_THUMBS_UP and not for_left_hand: # Thumbs up with right hand
-        draw_rounded_rect(screen,pygame.Rect(eff_hcx-HAND_SIZE_W*0.3,eff_hcy,HAND_SIZE_W*0.6,HAND_SIZE_H*0.7),color,HAND_SIZE_W//5,0)
-        draw_rounded_rect(screen,pygame.Rect(eff_hcx-HAND_SIZE_W*0.35,eff_hcy-HAND_SIZE_H*0.5,HAND_SIZE_W*0.3,HAND_SIZE_H*0.5),color,HAND_SIZE_W//6,0)
-    elif hand_state == HAND_STATE_POINTING_LEFT and for_left_hand:
-        draw_rounded_rect(screen,pygame.Rect(eff_hcx,eff_hcy-HAND_SIZE_H*0.2,HAND_SIZE_W*0.6,HAND_SIZE_H*0.4),color,HAND_SIZE_W//5,0)
-        draw_rounded_rect(screen,pygame.Rect(eff_hcx-HAND_SIZE_W*0.7,eff_hcy-HAND_SIZE_H*0.1,HAND_SIZE_W*0.7,HAND_SIZE_H*0.2),color,HAND_SIZE_W//6,0)
-    elif hand_state == HAND_STATE_POINTING_RIGHT and not for_left_hand:
-        draw_rounded_rect(screen,pygame.Rect(eff_hcx-HAND_SIZE_W*0.6,eff_hcy-HAND_SIZE_H*0.2,HAND_SIZE_W*0.6,HAND_SIZE_H*0.4),color,HAND_SIZE_W//5,0)
-        draw_rounded_rect(screen,pygame.Rect(eff_hcx,eff_hcy-HAND_SIZE_H*0.1,HAND_SIZE_W*0.7,HAND_SIZE_H*0.2),color,HAND_SIZE_W//6,0)
-    elif hand_state == HAND_STATE_THINKING_CHIN and not for_left_hand: # Right hand to chin
-        draw_rounded_rect(screen,pygame.Rect(hcx-HAND_SIZE_W*0.3,hcy+HEAD_HEIGHT*0.4,HAND_SIZE_W*0.6,HAND_SIZE_H*0.6),color,HAND_SIZE_W//5,0)
-    elif hand_state == HAND_STATE_OPEN_PALM_UP:
-        draw_rounded_rect(screen,pygame.Rect(eff_hcx-HAND_SIZE_W//2,eff_hcy-HAND_SIZE_H*0.3,HAND_SIZE_W,HAND_SIZE_H*0.6),color,HAND_SIZE_W//4,0)
-    elif hand_state == HAND_STATE_FIST:
-        draw_rounded_rect(screen,palm_r.inflate(-HAND_SIZE_W*0.1,-HAND_SIZE_H*0.1),color,HAND_SIZE_W//4,0)
-    elif hand_state == HAND_STATE_FACEPALM and for_left_hand: # Left hand facepalm
-        fpalm_x = hcx - EYE_OFFSET_X*0.8; fpalm_y = hcy - HEAD_HEIGHT*0.35
-        draw_rounded_rect(screen,pygame.Rect(fpalm_x-HAND_SIZE_W//2,fpalm_y-HAND_SIZE_H//2,HAND_SIZE_W,HAND_SIZE_H),color,HAND_SIZE_W//4,0)
-    elif hand_state == HAND_STATE_HEART_LEFT and for_left_hand:
-        hr = pygame.Rect(eff_hcx-HAND_SIZE_W*0.1,eff_hcy-HAND_SIZE_H//2,HAND_SIZE_W*0.6,HAND_SIZE_H)
-        pygame.draw.arc(screen,HEART_PINK,hr,math.radians(90),math.radians(270),HAND_THICKNESS*2)
-        pygame.draw.line(screen,HEART_PINK,hr.midright,(hr.centerx,hr.bottom),HAND_THICKNESS*2)
-    elif hand_state == HAND_STATE_HEART_RIGHT and not for_left_hand:
-        hr = pygame.Rect(eff_hcx-HAND_SIZE_W*0.5,eff_hcy-HAND_SIZE_H//2,HAND_SIZE_W*0.6,HAND_SIZE_H)
-        pygame.draw.arc(screen,HEART_PINK,hr,math.radians(-90),math.radians(90),HAND_THICKNESS*2)
-        pygame.draw.line(screen,HEART_PINK,hr.midleft,(hr.centerx,hr.bottom),HAND_THICKNESS*2)
-    elif hand_state == HAND_STATE_SHRUG: # Both hands use OPEN_PALM_UP for shrug
-         draw_rounded_rect(screen,pygame.Rect(eff_hcx-HAND_SIZE_W//2,eff_hcy-HAND_SIZE_H*0.3,HAND_SIZE_W,HAND_SIZE_H*0.6),color,HAND_SIZE_W//4,0)
-
-
-def draw_hands_wrapper(lh_state, rh_state, hcx, hcy, color):
-    global wave_angle, wave_direction
-    wave_angle += wave_speed * wave_direction
-    if abs(wave_angle) > 30: wave_direction *= -1
-    if head_is_active:
-        draw_single_hand(hcx, hcy, lh_state, True, wave_angle, color)
-        draw_single_hand(hcx, hcy, rh_state, False, wave_angle, color)
-
-ai_spoken_text = ""; ai_target_facial_state = STATE_OFFLINE
-ai_target_left_hand = HAND_STATE_NONE; ai_target_right_hand = HAND_STATE_NONE
-expression_hold_time = 1.8; last_speech_event_time = 0 # Slightly longer hold
-ai_speech_schedule = [
-    ("Initiating boot sequence...", STATE_PROCESSING, HAND_STATE_NONE, HAND_STATE_NONE, 2.5),
-    ("Greetings, carbon-based unit! I am online.", STATE_HAPPY, HAND_STATE_WAVE_HIGH, HAND_STATE_NONE, 4),
-    ("System analysis complete. All parameters nominal.", STATE_PROUD, HAND_STATE_NONE, HAND_STATE_THUMBS_UP, 4),
-    ("What is the nature of your query?", STATE_CURIOUS, HAND_STATE_NONE, HAND_STATE_THINKING_CHIN, 3.5),
-    ("Calculating probabilities... this requires concentration.", STATE_THINKING, HAND_STATE_FIST, HAND_STATE_THINKING_CHIN, 5),
-    ("That input is... unexpected! Fascinating!", STATE_SURPRISED, HAND_STATE_OPEN_PALM_UP, HAND_STATE_OPEN_PALM_UP, 4),
-    ("My circuits are buzzing with excitement!", STATE_LAUGHING, HAND_STATE_NONE, HAND_STATE_NONE, 3),
-    ("Threat detected! Defensive protocols engaged!", STATE_ANGRY, HAND_STATE_FIST, HAND_STATE_FIST, 4),
-    ("I register a minor logical inconsistency. My apologies.", STATE_SAD, HAND_STATE_NONE, HAND_STATE_FACEPALM, 4.5),
-    ("Heh. A most... devious calculation.", STATE_SCHEMING, HAND_STATE_NONE, HAND_STATE_NONE, 3.5),
-    ("My gratitude matrix is overflowing! Thank you!", STATE_EMBARRASSED, HAND_STATE_HEART_LEFT, HAND_STATE_HEART_RIGHT, 4),
-    ("Commencing scheduled data defragmentation. Please wait.", STATE_BORED, HAND_STATE_NONE, HAND_STATE_NONE, 5),
-    ("Powering down. Farewell... for now.", STATE_SLEEPING, HAND_STATE_NONE, HAND_STATE_NONE, 4),
-]
-current_speech_index = 0; next_speech_time = time.time() + 0.5 # Faster initial pop-up
-is_currently_speaking = False; current_speech_end_time = 0
-
-def process_ai_output(text, facial_hint=None, left_hand_hint=None, right_hand_hint=None):
-    global ai_target_facial_state, ai_target_left_hand, ai_target_right_hand
-    txt_l = text.lower()
-    ai_target_facial_state = facial_hint if facial_hint else (STATE_TALKING if text else STATE_IDLE)
-    ai_target_left_hand = left_hand_hint if left_hand_hint else HAND_STATE_NONE
-    ai_target_right_hand = right_hand_hint if right_hand_hint else HAND_STATE_NONE
-
-    if not facial_hint: # Infer facial state if not provided
-        if any(w in txt_l for w in ["joke","haha","funny","lol","hilarious","amusing"]): ai_target_facial_state = STATE_LAUGHING
-        elif any(w in txt_l for w in ["hello","hi","greetings","hey"]): ai_target_facial_state = STATE_HAPPY
-        elif any(w in txt_l for w in ["proud","well done","excellent","nominal"]): ai_target_facial_state = STATE_PROUD
-        elif any(w in txt_l for w in ["sorry","sad","apologies","alas","oops"]): ai_target_facial_state = STATE_SAD
-        elif any(w in txt_l for w in ["hmm","think","wonder","maybe","perhaps","calculating","concentration"]): ai_target_facial_state = STATE_THINKING
-        elif any(w in txt_l for w in ["curious","query","tell me more"]): ai_target_facial_state = STATE_CURIOUS
-        elif any(w in txt_l for w in ["angry","error","threat","warning","critical"]): ai_target_facial_state = STATE_ANGRY
-        elif any(w in txt_l for w in ["wow","really","omg","amazing","surprising","unexpected","fascinating"]): ai_target_facial_state = STATE_SURPRISED
-        elif any(w in txt_l for w in ["what?","huh?","confused","don't understand","inconsistency"]): ai_target_facial_state = STATE_CONFUSED
-        elif any(w in txt_l for w in ["wink",";)"]): ai_target_facial_state = STATE_WINKING
-        elif any(w in txt_l for w in ["shy","blush","embarrassed","gratitude"]): ai_target_facial_state = STATE_EMBARRASSED
-        elif any(w in txt_l for w in ["mischief","scheming","hehe","devious"]): ai_target_facial_state = STATE_SCHEMING
-        elif any(w in txt_l for w in ["bored","sigh","whatever","dull","defragmentation","wait"]): ai_target_facial_state = STATE_BORED
-        elif any(w in txt_l for w in ["initiating","boot","processing","standby","analysis"]): ai_target_facial_state = STATE_PROCESSING
-        elif any(w in txt_l for w in ["good night","powering down","sleep","farewell","deactivation"]): ai_target_facial_state = STATE_SLEEPING
+    if msg_for_gui is None:
+        msg_for_gui = text_to_speak[:50] + "..." if len(text_to_speak) > 50 else text_to_speak
     
-    if not left_hand_hint and not right_hand_hint: # Infer hands if not provided
-        if ai_target_facial_state == STATE_HAPPY and ("hello" in txt_l or "hi" in txt_l or "greetings" in txt_l): ai_target_left_hand = HAND_STATE_WAVE_MID
-        elif ai_target_facial_state == STATE_PROUD: ai_target_right_hand = HAND_STATE_THUMBS_UP
-        elif ai_target_facial_state == STATE_THINKING or ai_target_facial_state == STATE_CURIOUS: ai_target_right_hand = HAND_STATE_THINKING_CHIN
-        elif ai_target_facial_state == STATE_SAD and ("sorry" in txt_l or "apologies" in txt_l or "oops" in txt_l): ai_target_right_hand = HAND_STATE_FACEPALM # Use right hand for facepalm
-        elif ai_target_facial_state == STATE_EMBARRASSED and ("gratitude" in txt_l or "thank you" in txt_l): ai_target_left_hand, ai_target_right_hand = HAND_STATE_HEART_LEFT, HAND_STATE_HEART_RIGHT
-        elif ai_target_facial_state == STATE_CONFUSED or ("what?" in txt_l or "huh?" in txt_l) : ai_target_left_hand, ai_target_right_hand = HAND_STATE_SHRUG, HAND_STATE_SHRUG
-        elif ai_target_facial_state == STATE_ANGRY : ai_target_left_hand, ai_target_right_hand = HAND_STATE_FIST, HAND_STATE_FIST
+    send_gui_command(expression_during_speech, f"Loki: {msg_for_gui}")
+    print("🤖 Bot:", text_to_speak)
+    try:
+        if engine._inLoop: # If stuck from a previous call
+            engine.endLoop()
+        engine.say(text_to_speak)
+        engine.runAndWait()
+    except Exception as e:
+        print(f"Robot TTS Error: {e}")
+        # Fallback if TTS fails, at least print it
+        print(f"Robot TTS Fallback (Error was {e}): {text_to_speak}")
 
+# --- Modified Listen function ---
+def listen():
+    send_gui_command(EXPR_LISTENING, "Listening...")
+    r = sr.Recognizer()
+    query = ""
+    try:
+        with sr.Microphone() as source:
+            print("🎤 Listening...")
+            r.pause_threshold = 0.8 # Adjust if it cuts off too soon/late
+            r.energy_threshold = 400 # Default is 300, raise if too sensitive
+            r.dynamic_energy_threshold = True # Adapts to noise
+            r.adjust_for_ambient_noise(source, duration=1)
+            try:
+                audio = r.listen(source, timeout=7, phrase_time_limit=10) # Shorter phrase limit
+                print("Robot Log: Audio captured, recognizing...")
+                query = r.recognize_google(audio)
+                print("🧑 You:", query)
+                send_gui_command(EXPR_THINKING, f"You: {query[:40]}...")
+                query = query.lower()
+            except sr.WaitTimeoutError:
+                print("Robot Log: No speech detected (timeout).")
+                send_gui_command(EXPR_NEUTRAL, "Didn't hear anything that time.")
+            except sr.UnknownValueError:
+                print("Robot Log: Google SR could not understand audio.")
+                send_gui_command(EXPR_NEUTRAL, "Sorry, I couldn't quite understand.")
+            except sr.RequestError as e:
+                print(f"Robot SR Error: {e}")
+                speak("My apologies, the speech service seems to have an issue.", EXPR_SAD)
+                send_gui_command(EXPR_NEUTRAL, "Speech service error.")
+    except Exception as e: # Catch broader errors like no microphone
+        print(f"Robot Log: Critical listening error (e.g., no microphone?): {e}")
+        speak("I'm having trouble with my microphone input right now.", EXPR_SAD)
+        send_gui_command(EXPR_SAD, "Microphone input error.")
+    return query
 
-running = True
-while running:
-    current_time = time.time()
-    if current_facial_state == STATE_OFFLINE and current_time >= next_speech_time :
-        current_facial_state = STATE_ENTERING
-        next_speech_time = current_time + 1.5 # Pop-up duration before first speech
-    if current_facial_state == STATE_ENTERING:
-        head_current_y += (HEAD_REST_Y - head_current_y) * pop_up_speed
-        if abs(HEAD_REST_Y - head_current_y) < 1:
-            head_current_y = HEAD_REST_Y; current_facial_state = STATE_IDLE; head_is_active = True
-            last_speech_event_time = current_time; next_speech_time = current_time + 0.5
+# --- Hugging Face Local Model Integration ---
+LOCAL_AI_PIPELINE = None
+CURRENT_CONVERSATION = None # Stores transformers.Conversation object
+
+def initialize_local_ai_model():
+    global LOCAL_AI_PIPELINE, CURRENT_CONVERSATION
+    if not TRANSFORMERS_AVAILABLE:
+        msg = "Local AI (transformers library) is not installed. General conversation is disabled."
+        print(f"Robot Warning: {msg}")
+        send_gui_command(EXPR_SAD, "Local AI module disabled.")
+        return
+
+    if LOCAL_AI_PIPELINE is None: # Load only once
+        send_gui_command(EXPR_PROCESSING, "Warming up local AI...")
+        speak("Please wait a moment, I'm preparing my local AI brain. This can take a minute or two on the first run...", EXPR_PROCESSING)
+        try:
+            model_name = "microsoft/DialoGPT-medium"
+            print(f"Robot Log: Attempting to load Hugging Face model: {model_name}")
+            # device=-1 for CPU. For GPU (if PyTorch with CUDA is installed): device=0
+            # For M1/M2 Macs with PyTorch nightly/metal support, you might use device="mps"
+            LOCAL_AI_PIPELINE = pipeline("conversational", model=model_name, device=-1)
+            CURRENT_CONVERSATION = Conversation() # Initialize an empty conversation
+            print(f"Robot Log: Local AI model ({model_name}) loaded successfully.")
+            speak("My local AI brain is now ready for conversation!", EXPR_HAPPY)
+            send_gui_command(EXPR_HAPPY, "Local AI Online!")
+        except OSError as e: # Often related to model files not found or disk issues
+             print(f"Robot CRITICAL Error (OSError): Failed to load local AI model '{model_name}'. Model files might be missing or corrupted. {e}")
+             speak(f"I had a disk or file issue loading my local AI brain. Please check console. General conversation limited.", EXPR_SAD)
+             send_gui_command(EXPR_SAD, "Local AI File Error.")
+             LOCAL_AI_PIPELINE = None
+        except Exception as e: # Catch other errors during model loading
+            print(f"Robot CRITICAL Error: Failed to load local AI model '{model_name}': {e}")
+            traceback.print_exc()
+            speak("I encountered an unexpected issue while trying to load my local AI brain. General conversation will be limited.", EXPR_SAD)
+            send_gui_command(EXPR_SAD, "Local AI Load Failed.")
+            LOCAL_AI_PIPELINE = None
+
+def ask_local_model(prompt: str):
+    global LOCAL_AI_PIPELINE, CURRENT_CONVERSATION
+    if not LOCAL_AI_PIPELINE:
+        return "My local AI capabilities are currently offline due to an earlier issue."
+    if not prompt:
+        return "What would you like to discuss?"
+
+    send_gui_command(EXPR_THINKING, "Local AI processing...")
+    try:
+        print(f"Robot Log: Sending to Local AI (DialoGPT): '{prompt}'")
+        CURRENT_CONVERSATION.add_user_input(prompt)
+        # max_new_tokens controls length of model's response
+        # num_beams can improve quality but is slower, typical values 2-5
+        # no_repeat_ngram_size can help reduce repetition
+        result = LOCAL_AI_PIPELINE(CURRENT_CONVERSATION,
+                                   pad_token_id=LOCAL_AI_PIPELINE.tokenizer.eos_token_id,
+                                   max_new_tokens=75, # Shorter, quicker responses
+                                   no_repeat_ngram_size=3,
+                                   temperature=0.7, # Controls randomness (0.7-0.9 often good)
+                                   top_p=0.9)       # Nucleus sampling
+
+        response_text = result.generated_responses[-1]
+        print(f"Robot Log: Received from Local AI: '{response_text}'")
+        # Clean up potential artifacts if model repeats prompt or adds "Bot:"
+        if response_text.lower().startswith(prompt.lower()):
+            response_text = response_text[len(prompt):].lstrip(" .,:")
+        if response_text.lower().startswith("bot:"):
+            response_text = response_text[4:].lstrip()
+
+        return response_text if response_text else "I'm not sure how to respond to that."
+    except Exception as e:
+        print(f"Robot Error: Error interacting with local AI model: {e}")
+        traceback.print_exc()
+        CURRENT_CONVERSATION = Conversation() # Reset conversation on error
+        return "I'm having a little trouble with my local thoughts right now. Let's try something else."
+
+# --- save_name, load_name ---
+def save_name(name):
+    try:
+        with open(MEMORY_FILE, "w") as f: f.write(name.strip().title())
+    except IOError as e: print(f"Error saving name: {e}")
+
+def load_name():
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, "r") as f: return f.read().strip()
+        except IOError as e: print(f"Error loading name: {e}")
+    return None
+
+# --- Face Recognition Functions ---
+def load_known_faces():
+    global KNOWN_FACE_ENCODINGS, KNOWN_FACE_NAMES
+    if not os.path.exists(FACES_DIR):
+        print(f"Robot Warning: Faces directory '{FACES_DIR}' not found."); return False
+    print(f"Robot Log: Loading known faces from {FACES_DIR}...")
+    loaded_count = 0; KNOWN_FACE_ENCODINGS = []; KNOWN_FACE_NAMES = []
+    for filename in os.listdir(FACES_DIR):
+        if filename.lower().endswith((".jpg", ".jpeg", ".png")):
+            name = os.path.splitext(filename)[0].title()
+            image_path = os.path.join(FACES_DIR, filename)
+            try:
+                image = face_recognition.load_image_file(image_path)
+                encodings = face_recognition.face_encodings(image)
+                if encodings:
+                    KNOWN_FACE_ENCODINGS.append(encodings[0]); KNOWN_FACE_NAMES.append(name)
+                    print(f"Robot Log: Loaded face - {name}"); loaded_count+=1
+                else: print(f"Robot Warning: No face found in {image_path} for {name}.")
+            except Exception as e: print(f"Robot Error loading face {image_path}: {e}")
+    if loaded_count > 0: print(f"Robot Log: Loaded {loaded_count} known faces."); return True
+    else: print("Robot Log: No known faces loaded."); return False
+
+def recognize_face_from_cam():
+    if not KNOWN_FACE_ENCODINGS: print("Robot Log: No known faces for recognition."); return None
     
-    head_current_center_x = FACE_CENTER_X; head_current_center_y = int(head_current_y)
-    head_top_y_pos = head_current_center_y - HEAD_HEIGHT // 2
-    current_feature_color_to_draw = get_feature_color(current_facial_state)
+    video_capture = None
+    try:
+        video_capture = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        if not video_capture.isOpened():
+            print("Robot Warning: DSHOW backend failed, trying default camera...")
+            video_capture = cv2.VideoCapture(0)
+            if not video_capture.isOpened():
+                speak("I couldn't access the camera for face check.", EXPR_SAD); return None
+    except Exception as e:
+        print(f"Robot Error opening camera: {e}")
+        speak("Problem accessing the camera.", EXPR_SAD); return None
 
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE): running = False
-        if event.type == pygame.KEYDOWN: # Kept color change for debugging
-            if event.key == pygame.K_1: current_face_color = CYBER_BLUE
-            elif event.key == pygame.K_2: current_face_color = ENERGY_GREEN
-            elif event.key == pygame.K_3: current_face_color = WARNING_RED
-            elif event.key == pygame.K_4: current_face_color = DATA_YELLOW
+    print("Robot Log: Face recognition cam... (CV2 window, 'q' to skip)")
+    send_gui_command(EXPR_THINKING, "Looking for familiar faces...")
+    face_found_name = None; start_time = time.time(); timeout = 7
+    window_name = "Face Recognition - Loki ('q' to skip)"
 
+    try:
+        while (time.time() - start_time) < timeout:
+            ret, frame = video_capture.read()
+            if not ret: print("Robot Warning: Cam frame grab failed."); break
+            small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+            try:
+                locations = face_recognition.face_locations(rgb_small_frame, model="hog")
+                encodings_in_frame = face_recognition.face_encodings(rgb_small_frame, locations, num_jitters=1)
+            except Exception as e: print(f"Robot Error CV2 face detect: {e}"); break 
+            for face_encoding in encodings_in_frame:
+                matches = face_recognition.compare_faces(KNOWN_FACE_ENCODINGS, face_encoding, 0.55) # Stricter tolerance
+                if True in matches:
+                    face_found_name = KNOWN_FACE_NAMES[matches.index(True)]; break
+            if face_found_name: break
+            
+            # Display frame with boxes (even if unknown)
+            for (top, right, bottom, left) in locations:
+                top *= 4; right *= 4; bottom *= 4; left *= 4
+                cv2.rectangle(frame, (left, top), (right, bottom), (0, 180, 50), 2) # Green box
+            cv2.imshow(window_name, frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'): print("Robot Log: Face recog (CV2) skipped."); break
+    finally: # Ensure camera is released and windows closed
+        if video_capture: video_capture.release()
+        cv2.destroyAllWindows() # Close all OpenCV windows
 
-    if head_is_active and not is_currently_speaking and current_time >= next_speech_time:
-        if current_speech_index < len(ai_speech_schedule):
-            txt, f_h, lh_h, rh_h, dur = ai_speech_schedule[current_speech_index]
-            ai_spoken_text = txt
-            process_ai_output(txt, f_h, lh_h, rh_h)
-            current_facial_state = ai_target_facial_state
-            current_left_hand_state = ai_target_left_hand
-            current_right_hand_state = ai_target_right_hand
-            is_currently_speaking = True; current_speech_end_time = current_time + dur
-            last_speech_event_time = current_time
-            current_speech_index = (current_speech_index + 1) % len(ai_speech_schedule)
-            next_speech_time = current_speech_end_time + random.uniform(1.2, 2.5)
+    if face_found_name: send_gui_command(EXPR_HAPPY, f"Recognized {face_found_name}!")
+    else: send_gui_command(EXPR_NEUTRAL, "No familiar face by camera.")
+    return face_found_name
+
+# --- Process Voice Commands ---
+current_user_state = None
+def process_command(command: str):
+    global current_user_state
+    if not command: send_gui_command(EXPR_NEUTRAL, ""); return current_user_state
+
+    # --- Specific command to identify bot ---
+    if command == "what is your name":
+        speak("My name is Loki, your virtual assistant!", EXPR_SMILING)
+        send_gui_command(EXPR_SMILING, "I'm Loki!")
+        return current_user_state
+
+    # --- User identification ---
+    elif "my name is" in command:
+        name_part = command.split("my name is", 1)[1].strip()
+        if name_part:
+            name = name_part.title(); save_name(name)
+            speak(f"Nice to meet you, {name}. I’ll remember that!", EXPR_HAPPY)
+            current_user_state = name; send_gui_command(EXPR_HAPPY, f"Met {name}!")
+        else: speak("I didn't quite catch the name. Could you repeat?", EXPR_THINKING)
+        return current_user_state
+
+    elif "what is my name" in command or "who am i" in command:
+        if current_user_state: speak(f"Your name is {current_user_state}.", EXPR_SMILING)
+        else: speak("I don't know your name yet. You can tell me!", EXPR_SHYING)
+
+    # --- Web and Media ---
+    elif "open youtube" in command:
+        speak("Opening YouTube now.", EXPR_NEUTRAL); webbrowser.open("https://youtube.com")
+        send_gui_command(EXPR_NEUTRAL, "Opened YouTube.")
+    elif "search google for" in command:
+        query = command.replace("search google for", "").strip()
+        if query:
+            speak(f"Searching Google for {query}", EXPR_THINKING); webbrowser.open(f"https://google.com/search?q={query}")
+            send_gui_command(EXPR_NEUTRAL, f"Searched: {query[:20]}...")
+        else: speak("What would you like me to search on Google?", EXPR_THINKING)
+    elif "play song" in command or ("play" in command and "on youtube" in command):
+        term = command.lower().replace("play song", "").replace("play", "").replace("on youtube","").strip()
+        if term:
+            speak(f"Playing {term} on YouTube.", EXPR_HAPPY);
+            try: pywhatkit.playonyt(term)
+            except Exception as e: print(f"pywhatkit error: {e}"); speak(f"Couldn't play {term} due to an error.", EXPR_SAD)
+            send_gui_command(EXPR_HAPPY, f"Playing: {term[:20]}...")
+        else: speak("What song would you like me to play?", EXPR_THINKING)
+
+    # --- Information ---
+    elif "time" in command:
+        speak(f"The current time is {datetime.datetime.now().strftime('%I:%M %p')}", EXPR_NEUTRAL)
+    elif "date" in command:
+        speak(f"Today is {datetime.datetime.now().strftime('%A, %B %d, %Y')}", EXPR_NEUTRAL)
+    elif "who is" in command or "what is" in command or "tell me about" in command:
+        if "your name" in command and "what is" in command : speak("I am Loki!", EXPR_SMILING)
+        else:
+            query = command.lower().replace("who is", "").replace("what is", "").replace("tell me about", "").strip()
+            if query:
+                speak(f"Looking up {query} on Wikipedia...", EXPR_THINKING)
+                try:
+                    result = wikipedia.summary(query, sentences=2, auto_suggest=True, redirect=True)
+                    speak(result, EXPR_TALKING)
+                except wikipedia.exceptions.PageError: speak(f"Sorry, no Wikipedia page for {query}.", EXPR_SAD)
+                except wikipedia.exceptions.DisambiguationError as e: speak(f"'{query}' is ambiguous (e.g., {', '.join(e.options[:2])}). Be more specific?", EXPR_THINKING)
+                except Exception as e: print(f"Wiki error: {e}"); speak("Error searching Wikipedia.", EXPR_SAD)
+            else: speak("Who or what are you asking about?", EXPR_THINKING)
+
+    # --- Communication ---
+    elif "send whatsapp message" in command:
+        speak("To which 10 digit number?", EXPR_THINKING); num_q = listen()
+        phone = "".join(filter(str.isdigit, num_q or ""));
+        if len(phone) == 10:
+            speak("And what message should I send?", EXPR_THINKING); msg_c = listen()
+            if msg_c:
+                try:
+                    speak(f"Sending '{msg_c[:20]}...' to {phone}. Confirm in WhatsApp Web.", EXPR_PROCESSING)
+                    pywhatkit.sendwhatmsg_instantly(f"+91{phone}", msg_c, wait_time=30, tab_close=False, close_time=5) # Increased wait, keep tab open
+                    speak("Message has been scheduled on WhatsApp Web.", EXPR_HAPPY)
+                except Exception as e: print(f"WA error: {e}"); speak("Couldn't send WA msg. Is Web ready?", EXPR_SAD)
+            else: speak("I didn't catch the message content.", EXPR_SAD)
+        else: speak("That doesn't seem like a valid 10-digit number.", EXPR_SAD)
+
+    # --- Fun & Emotional ---
+    elif "ask for a kiss" in command or "give me a kiss" in command:
+        speak("Of course! Mwah!", EXPR_LOVELY)
+        send_gui_command(expression=EXPR_KISSING_HEART, message="<3 Sending love! <3")
+    elif "how are you" in command:
+        speak("I'm functioning optimally, thank you for asking! And you?", EXPR_HAPPY) # Engage back
+    elif "tell me a joke" in command or "joke" in command:
+        speak(pyjokes.get_joke(language='en', category='all'), EXPR_LAUGHING)
+    elif "i am sad" in command or "i feel sad" in command:
+        speak("I'm sorry to hear you're feeling down. Remember that feelings pass. I'm here if you need to vent.", EXPR_SAD)
+        send_gui_command(EXPR_SAD, "Sending virtual comfort...")
+    elif "i am happy" in command or "i feel happy" in command:
+        speak("That's wonderful to hear! What's making you happy?", EXPR_HAPPY)
+    elif "i am angry" in command:
+        speak("Oh dear, I understand anger can be tough. Try taking a few deep breaths. Is there anything I can do?", EXPR_CONCERNED)
+
+    # --- Help command ---
+    elif "what can you do" in command or "help" == command.strip():
+        cmds = ["ask about my name or your name", "open YouTube or Google", "play songs", "get time or date",
+                "search Wikipedia", "send WhatsApp messages", "tell jokes or give a kiss",
+                "react to 'I am sad/happy/angry'", "shutdown or restart the system", "and say 'exit' to close me."]
+        speak("I can do several things! For example, you can:", EXPR_HAPPY)
+        # for i, c_example in enumerate(cmds[:3]): # Speak first few examples
+        #     speak(c_example, EXPR_SMILING); time.sleep(0.1)
+        print("🤖 Bot: Here are some things I can do:")
+        for c_example in cmds: print(f"  - {c_example}")
+        send_gui_command(EXPR_HAPPY, "I can help with many tasks! Try asking.")
+
+    # --- System Commands ---
+    elif "shutdown system" in command:
+        speak("Are you absolutely sure you want to shut down your computer? Say 'yes' to confirm.", EXPR_CONCERNED); conf = listen()
+        if "yes" in (conf or ""): speak("Okay, shutting down your computer in 5 seconds. Goodbye!", EXPR_SLEEPY); os.system("shutdown /s /t 5")
+        else: speak("Shutdown cancelled. Phew!", EXPR_NEUTRAL)
+    elif "restart system" in command:
+        speak("Are you sure you want to restart your computer? Say 'yes'.", EXPR_CONCERNED); conf = listen()
+        if "yes" in (conf or ""): speak("Okay, restarting your computer in 5 seconds.", EXPR_NEUTRAL); os.system("shutdown /r /t 5")
+        else: speak("Restart cancelled.", EXPR_NEUTRAL)
+
+    # --- Exit ---
+    elif "exit" in command or "stop" in command or "goodbye" in command:
+        speak("Goodbye! It was a pleasure assisting you. Have a wonderful day!", EXPR_SMILING); time.sleep(0.5)
+        return "exit_signal"
+
+    # --- Fallback to Local AI ---
+    else:
+        if TRANSFORMERS_AVAILABLE:
+            if LOCAL_AI_PIPELINE:
+                response_ai = ask_local_model(command)
+                speak(response_ai if response_ai else "I'm not sure how to respond to that.", EXPR_TALKING)
+            else: speak("My local AI brain is still warming up or had an issue. Please try specific commands or wait a moment.", EXPR_CONCERNED)
+        else: speak("I can only handle specific commands right now as my advanced AI module isn't installed.", EXPR_SAD)
+
+    send_gui_command(EXPR_NEUTRAL, "") # Default GUI state after command if not set otherwise
+    return current_user_state # Return current user state
+
+# --- Assistant Setup and Main Loop Orchestration ---
+def assistant_setup():
+    """One-time setup for the assistant: loads models, greets user."""
+    global current_user_state
+    send_gui_command(EXPR_NEUTRAL, "Loki is waking up...")
+    initialize_local_ai_model() # Load Hugging Face model (can take time)
+
+    if load_known_faces(): # Load face recognition data
+        # Attempt camera-based recognition
+        recognized_name_cam = recognize_face_from_cam() # This shows a CV2 window
+        if recognized_name_cam:
+            current_user_state = recognized_name_cam
+            save_name(current_user_state) # Remember recognized user
+            speak(f"Hello {current_user_state}, it's great to see your face!", EXPR_HAPPY)
+        else: # No face recognized by camera, try loading from memory
+            current_user_state = load_name()
+            if current_user_state:
+                speak(f"Hi {current_user_state}, welcome back!", EXPR_HAPPY)
+            else: # No saved name either
+                speak("Hello! I'm Loki. To get to know you better, you can tell me your name by saying 'my name is ...'", EXPR_NEUTRAL)
+    else: # Failed to load known faces data
+        speak("There was an issue with setting up face recognition. We can still chat!", EXPR_SAD)
+        current_user_state = load_name() # Try loading name from memory anyway
+        if current_user_state:
+            speak(f"Hi {current_user_state}, let's get started!", EXPR_HAPPY)
+        else:
+            speak("Hello! I'm Loki. How can I assist you today?", EXPR_NEUTRAL)
+    
+    final_greeting = f"Hi {current_user_state}!" if current_user_state else "Hi there! How can I help?"
+    send_gui_command(EXPR_NEUTRAL, final_greeting) # Set initial GUI message
+
+def assistant_main_cycle():
+    """Performs one full cycle of listening, processing, and responding."""
+    global current_user_state
+    command_heard = listen() # listen() updates GUI
+    if command_heard:
+        return process_command(command_heard) # process_command() updates GUI and returns signal or user state
+    return None # No command heard, continue loop
+
+def robot_logic_thread_function(stop_event: threading.Event):
+    """Target function for the robot's logic thread."""
+    print("Robot Thread: Initializing assistant logic...")
+    try:
+        assistant_setup()
+        while not stop_event.is_set():
+            signal = assistant_main_cycle()
+            if signal == "exit_signal":
+                print("Robot Thread: Exit signal received from assistant logic."); break
+            if stop_event.is_set(): # Check if main GUI thread requested stop
+                print("Robot Thread: Stop event detected from main thread."); break
+            time.sleep(0.05) # Brief pause to yield CPU if listen() returns very quickly
+    except Exception as e:
+        print(f"Robot Thread: UNHANDLED EXCEPTION: {e}")
+        traceback.print_exc() # Print full traceback for debugging
+    finally:
+        print("Robot Thread: Shutting down assistant logic...")
+        send_gui_command(EXPR_SLEEPY, "Loki is going offline...")
+        if GUI_COMMAND_QUEUE: # Try to send a quit signal to GUI if robot thread is exiting first
+            try: GUI_COMMAND_QUEUE.put_nowait({"type": "system", "action": "quit"})
+            except queue.Full: pass
+        time.sleep(1) # Allow GUI to show final message
+
+# --- Main Application Entry Point ---
+if __name__ == "__main__":
+    print("Main App: Loki Voice Assistant with GUI starting...")
+    # 1. Create communication queue (Robot Logic Thread -> GUI Main Thread)
+    shared_gui_command_queue = queue.Queue(maxsize=50) # Increased maxsize
+
+    # 2. Provide this queue to the robot module (for send_gui_command)
+    set_global_gui_queue(shared_gui_command_queue)
+
+    # 3. Event to signal robot logic thread to stop
+    robot_thread_stop_event = threading.Event()
+
+    # 4. Start Robot Logic in a separate thread
+    print("Main App: Launching Robot Logic Thread...")
+    assistant_thread = threading.Thread(
+        target=robot_logic_thread_function,
+        args=(robot_thread_stop_event,),
+        daemon=True # Thread will exit if main program exits
+    )
+    assistant_thread.start()
+
+    # 5. Initialize and Run Pygame GUI in the Main Thread
+    gui_instance = None
+    print("Main App: Initializing and running Robot Face GUI...")
+    try:
+        gui_instance = RobotFaceGUI(command_queue=shared_gui_command_queue)
+        gui_instance.run_gui_loop() # This is blocking; runs until GUI window is closed
+    except Exception as e:
+        print(f"Main App: CRITICAL ERROR in GUI execution: {e}")
+        traceback.print_exc()
+    finally:
+        print("Main App: GUI loop has finished or an error occurred.")
         
-    if is_currently_speaking and current_time >= current_speech_end_time:
-        is_currently_speaking = False; ai_spoken_text = ""
-        if current_facial_state == STATE_TALKING: current_facial_state = STATE_IDLE
-        # Keep emotional hands for a bit longer unless explicitly set to NONE by next speech
-        if current_left_hand_state != HAND_STATE_NONE or current_right_hand_state != HAND_STATE_NONE:
-            last_speech_event_time = current_time # Reset timer for hand hold
-
-    if not is_currently_speaking:
-        if current_facial_state not in [STATE_IDLE, STATE_SLEEPING, STATE_PROCESSING, STATE_OFFLINE, STATE_ENTERING]:
-            if current_time - last_speech_event_time > expression_hold_time:
-                current_facial_state = STATE_IDLE
-        if current_left_hand_state != HAND_STATE_NONE or current_right_hand_state != HAND_STATE_NONE:
-             if current_time - last_speech_event_time > expression_hold_time + 0.5 : # Hold hands a bit longer
-                current_left_hand_state, current_right_hand_state = HAND_STATE_NONE, HAND_STATE_NONE
-        if current_facial_state == STATE_PROCESSING:
-             if current_time - last_speech_event_time > expression_hold_time + 1: current_facial_state = STATE_IDLE
-    
-    if current_facial_state == STATE_TALKING and ai_spoken_text:
-        if current_time - last_talk_anim_time > talk_anim_speed:
-            talk_cycle_count = (talk_cycle_count + 1) % 20; last_talk_anim_time = current_time
-    else: talk_cycle_count = 0
-
-    if is_blinking and current_time >= blink_end_time:
-        is_blinking = False; next_blink_time = current_time + random.uniform(3.0, 7.0)
-    if not is_blinking and current_time >= next_blink_time and current_facial_state not in [STATE_SLEEPING, STATE_OFFLINE, STATE_ENTERING]:
-        is_blinking = True; blink_end_time = current_time + blink_duration
-
-    screen.fill(DIGITAL_BLACK)
-    if current_facial_state != STATE_OFFLINE: # Only draw if not completely offline
-        draw_head_shape_and_antennae(head_current_center_x, head_current_center_y, current_feature_color_to_draw)
-        if head_is_active or current_facial_state == STATE_ENTERING : # Draw features if active or entering
-            draw_vector_eyes(current_facial_state, is_blinking, head_current_center_x, head_top_y_pos, current_feature_color_to_draw)
-            draw_vector_mouth(current_facial_state, talk_cycle_count, head_current_center_x, head_current_center_y, current_feature_color_to_draw)
-            draw_hands_wrapper(current_left_hand_state, current_right_hand_state, head_current_center_x, head_current_center_y, HAND_COLOR)
-
-    if head_is_active:
-        state_surf = font.render(f"Status: {current_facial_state.upper()}", True, current_feature_color_to_draw)
-        text_surf = font.render(f"Output: {ai_spoken_text[:80]}{'...' if len(ai_spoken_text)>80 else ''}", True, current_feature_color_to_draw)
-        screen.blit(state_surf, (20, 20))
-        screen.blit(text_surf, (20, 20 + font_size + 10))
-        help_text = small_font.render("ESC: Quit. 1-4: Change Base Color. Avatar is autonomous.", True, DATA_YELLOW)
-        screen.blit(help_text, (20, SCREEN_HEIGHT - small_font_size - 20))
-
-    pygame.display.flip()
-    clock.tick(FPS)
-
-pygame.quit()
+        # Signal the robot logic thread to stop
+        print("Main App: Signaling robot logic thread to stop...")
+        robot_thread_stop_event.set()
+        
+        # Wait for the robot logic thread to complete its shutdown
+        if assistant_thread.is_alive():
+            print("Main App: Waiting for robot logic thread to join...")
+            assistant_thread.join(timeout=7.0) # Increased timeout
+            if assistant_thread.is_alive():
+                print("Main App: Robot logic thread did not shut down cleanly (timed out).")
+            else:
+                print("Main App: Robot logic thread joined successfully.")
+        else:
+            print("Main App: Robot logic thread was already finished.")
+            
+        print("Main App: Application shutdown complete.")
