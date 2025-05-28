@@ -60,7 +60,6 @@ def listen_and_reply():
     """Listens for voice input, processes it, and generates a spoken reply."""
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
-        # Adjust for ambient noise to improve recognition
         # recognizer.adjust_for_ambient_noise(source, duration=0.5) 
         
         speak("I'm listening, Lokesh.") 
@@ -69,7 +68,6 @@ def listen_and_reply():
 
         try:
             print("Mic check: Listening for audio...")
-            # Increased timeout slightly, phrase_time_limit can be longer
             audio = recognizer.listen(source, timeout=7, phrase_time_limit=15) 
             status_label.config(text="Processing...")
             window.update_idletasks()
@@ -81,17 +79,16 @@ def listen_and_reply():
             window.update_idletasks()
 
             if command:
-                # Make Nova "think" before replying to add a slight dramatic pause
                 think_time_start = time.time()
                 reply_from_ollama = ask_ollama(command)
                 think_time_end = time.time()
                 print(f"Ollama took {think_time_end - think_time_start:.2f} seconds to respond.")
                 
-                if reply_from_ollama: # Make sure we got a reply
+                if reply_from_ollama:
                     speak(reply_from_ollama)
-                else: # If Ollama returned an empty string for some reason
+                else:
                     speak("I thought about it, but I don't have a specific response for that.")
-            else: # Should not happen if recognize_google succeeds
+            else:
                 speak("I didn't quite catch that, could you say it again?")
 
         except sr.WaitTimeoutError:
@@ -107,28 +104,22 @@ def listen_and_reply():
             speak("Oh dear, an unexpected hiccup occurred while I was listening.")
             print(f"An unexpected error in listen_and_reply: {e}")
         finally:
-            # Reset status label after interaction
             status_label.config(text="Hi, I'm Nova! Click the button to talk.") 
             window.update_idletasks()
 
 
 def start_listening_thread():
     """Starts the listening process in a new thread to keep GUI responsive."""
-    talk_button.config(state=tk.DISABLED) # Disable button to prevent multiple clicks
-    # Create a new thread that will run the 'listen_and_reply' function
-    # 'daemon=True' means the thread will close when the main program closes
+    talk_button.config(state=tk.DISABLED) 
     listening_thread = threading.Thread(target=listen_and_reply, daemon=True)
     listening_thread.start()
-    # We need a way to re-enable the button after the thread is done
     check_if_thread_is_done(listening_thread)
 
 def check_if_thread_is_done(thread_to_check):
     """Checks if the thread is still running. If not, re-enables the button."""
     if thread_to_check.is_alive():
-        # If still running, check again after 100 milliseconds
         window.after(100, lambda: check_if_thread_is_done(thread_to_check))
     else:
-        # If not running, re-enable the button
         talk_button.config(state=tk.NORMAL)
         status_label.config(text="Hi, I'm Nova! Click the button to talk.")
         print("Listening thread finished, button re-enabled.")
@@ -146,12 +137,10 @@ class AnimatedGIF(tk.Label):
 
         self._load_gif()
         
-        # Important: Initialize the tk.Label part of this class AFTER frames are loaded
-        if self.frames: # Only initialize if frames were loaded successfully
+        if self.frames: 
             super().__init__(master, image=self.frames[0], bg="black")
-            self.after(self.delay, self._play) # Start animation
-        else: # If frames list is empty (GIF loading failed)
-            # Create a fallback label to show an error
+            self.after(self.delay, self._play) 
+        else: 
             super().__init__(master, text="Error: GIF not loaded!", fg="red", bg="black", font=("Arial", 14))
             print(f"CRITICAL: AnimatedGIF class could not load frames for {self.path}")
 
@@ -162,7 +151,7 @@ class AnimatedGIF(tk.Label):
             
             try:
                 self.delay = im.info['duration']
-                if self.delay == 0: # Some GIFs have 0 duration, use a default
+                if self.delay == 0: 
                     self.delay = 100
             except KeyError:
                 self.delay = 100 
@@ -176,39 +165,52 @@ class AnimatedGIF(tk.Label):
                 
         except FileNotFoundError:
             print(f"ERROR: GIF file not found at '{self.path}'. Make sure it's in the 'assets' folder.")
-            self.frames = [] # Ensure frames list is empty on error
+            self.frames = [] 
         except Exception as e:
             print(f"ERROR: Could not load GIF '{self.path}'. Reason: {e}")
-            self.frames = [] # Ensure frames list is empty on error
+            self.frames = [] 
 
 
     def _play(self):
         if not self.frames: 
-            return # Stop if no frames
+            return 
         try:
             self.config(image=self.frames[self.idx])
             self.idx = (self.idx + 1) % len(self.frames)
             self.after(self.delay, self._play)
         except tk.TclError as e:
-            # This can happen if the window is closed while the animation is trying to update
             print(f"Tkinter error during animation (likely window closed): {e}")
         except Exception as e:
             print(f"Unexpected error in _play: {e}")
 
 
+# --- FUNCTION TO CLOSE THE WINDOW ---
+def close_window(event=None): 
+    """Closes Nova's window."""
+    print("Exiting Nova by Escape key or close function...")
+    window.destroy() # This safely closes the tkinter window
+
+
 # Step C.6: Create the Main GUI Window only if this script is run directly
 if __name__ == '__main__': 
     window = tk.Tk()
-    window.title("Nova AI Companion - Lokesh's Project") # Personalized title
-    window.geometry("800x600") 
+    
+    # --- MAKE WINDOW FULLSCREEN ---
+    window.attributes('-fullscreen', True)
+    # window.title("Nova AI Companion - Lokesh's Project") # No longer strictly needed for fullscreen
+    # window.geometry("800x600") # No longer strictly needed for fullscreen
+    
     window.configure(bg="black") 
+
+    # --- BIND ESCAPE KEY TO CLOSE WINDOW ---
+    window.bind('<Escape>', close_window) # Pressing Esc will call close_window
 
     # Step C.7: Load and Display the Animated GIF
     gif_path = "assets/nova.gif" # Path to your GIF
     nova_animation = AnimatedGIF(window, gif_path, size=(300,300)) # You can change (300,300)
-    if nova_animation.frames: # Only pack if GIF loaded
+    if nova_animation.frames: 
         nova_animation.pack(pady=20) 
-    else: # If GIF failed to load, show a message on the GUI
+    else: 
         error_label_gif = tk.Label(window, text=f"Could not load GIF from {gif_path}", fg="red", bg="black", font=("Arial", 12))
         error_label_gif.pack(pady=20)
 
@@ -220,7 +222,7 @@ if __name__ == '__main__':
     talk_button = tk.Button(window, text="🎤 Talk to Nova", 
                             font=("Arial", 14, "bold"), 
                             bg="#4CAF50", fg="white",  
-                            activebackground="#45a049", # Color when button is pressed
+                            activebackground="#45a049", 
                             activeforeground="white",
                             padx=15, pady=10,          
                             relief=tk.RAISED,          
@@ -230,7 +232,7 @@ if __name__ == '__main__':
 
     # Step C.10: Initial Welcome Message from Nova (in a thread)
     def initial_greeting_task():
-        time.sleep(1) # Wait a tiny bit for window to fully appear
+        time.sleep(1) 
         speak("Hello Lokesh! I am Nova, your personal AI companion. I'm online and ready when you are.")
         status_label.config(text="Hi, I'm Nova! Click the button to talk.")
     
