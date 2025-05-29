@@ -1,242 +1,321 @@
-# Step C.1: Import necessary libraries
-import tkinter as tk
-from PIL import Image, ImageTk, ImageSequence
-import pyttsx3
-import speech_recognition as sr
-import threading
-import requests
-import os 
-import time 
+# Remote_User/views.py
 
-# Step C.2: Setup Text-to-Speech Engine
-engine = pyttsx3.init()
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth.hashers import make_password, check_password
+from django.contrib import messages
 
-# Optional: You can try to set a specific voice if you want
-# voices = engine.getProperty('voices')
-# For example, to use the first available voice:
-# engine.setProperty('voice', voices[0].id) 
-# To use the second (if it exists, often a female voice on Windows):
-# if len(voices) > 1:
-#    engine.setProperty('voice', voices[1].id)
-# engine.setProperty('rate', 160) # You can adjust speech rate (words per minute)
+# Your models
+from .models import ClientRegister_Model, insurance_claim_status, detection_accuracy, detection_ratio
 
-def speak(text):
-    """Makes Nova speak the given text."""
-    print(f"Nova: {text}") 
-    engine.say(text)
-    engine.runAndWait()
+# Python standard libraries
+import datetime
+import re
+import string
 
-# Step C.3: Function to Interact with Ollama (Nova's Brain)
-def ask_ollama(prompt):
-    """Sends a prompt to the Ollama API and gets a response."""
-    ollama_api_url = "http://localhost:11434/api/generate"
-    payload = {
-        "model": "llama3", # Make sure you have 'llama3' pulled in Ollama (ollama pull llama3)
-        "prompt": prompt,
-        "stream": False # Keeps it simple for now
-    }
-    try:
-        print(f"User (to Ollama): {prompt}") 
-        # Timeout added for robustness
-        response = requests.post(ollama_api_url, json=payload, timeout=60) # 60 seconds timeout
-        response.raise_for_status() 
-        
-        response_data = response.json()
-        full_response = response_data.get("response", "").strip()
-        
-        return full_response
-    except requests.exceptions.Timeout:
-        print("Error: Connection to Ollama timed out.")
-        return "Sorry, my connection to my thinking brain timed out. Please try again."
-    except requests.exceptions.RequestException as e:
-        print(f"Error connecting to Ollama: {e}")
-        return "I'm having trouble connecting to my brain right now. Please make sure Ollama is running with the llama3 model."
-    except Exception as e:
-        print(f"Error processing Ollama response: {e}")
-        return "Sorry, I encountered an issue while thinking."
+# Third-party libraries for Machine Learning part
+import pandas as pd
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import MultinomialNB
+from sklearn import svm
+from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.ensemble import VotingClassifier
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, f1_score
 
-# Step C.4: Function to Listen to Your Voice and Reply
-def listen_and_reply():
-    """Listens for voice input, processes it, and generates a spoken reply."""
-    recognizer = sr.Recognizer()
-    with sr.Microphone() as source:
-        # recognizer.adjust_for_ambient_noise(source, duration=0.5) 
-        
-        speak("I'm listening, Lokesh.") 
-        status_label.config(text="Listening...") 
-        window.update_idletasks() 
+# LOGIN VIEW
+def login(request):
+    print("--- LOGIN VIEW: Top of function ---")
+    if request.method == "POST" and 'submit1' in request.POST:
+        print("--- LOGIN VIEW: POST request received ---")
+        username_from_form = request.POST.get('username')
+        password_from_form = request.POST.get('password')
+        print(f"--- LOGIN VIEW: Attempting login for username: {username_from_form} ---")
 
         try:
-            print("Mic check: Listening for audio...")
-            audio = recognizer.listen(source, timeout=7, phrase_time_limit=15) 
-            status_label.config(text="Processing...")
-            window.update_idletasks()
-            print("Mic check: Audio captured, now recognizing...")
-
-            command = recognizer.recognize_google(audio) 
-            print(f"You said: {command}")
-            status_label.config(text=f"You said: {command[:35]}...") 
-            window.update_idletasks()
-
-            if command:
-                think_time_start = time.time()
-                reply_from_ollama = ask_ollama(command)
-                think_time_end = time.time()
-                print(f"Ollama took {think_time_end - think_time_start:.2f} seconds to respond.")
-                
-                if reply_from_ollama:
-                    speak(reply_from_ollama)
-                else:
-                    speak("I thought about it, but I don't have a specific response for that.")
+            user_obj = ClientRegister_Model.objects.get(username=username_from_form)
+            print(f"--- LOGIN VIEW: User object found for {username_from_form} ---")
+            if check_password(password_from_form, user_obj.password):
+                print(f"--- LOGIN VIEW: Password CORRECT for {username_from_form} ---")
+                request.session['userid'] = user_obj.id
+                request.session['username'] = user_obj.username
+                print(f"--- LOGIN VIEW: Session set for userid: {user_obj.id}, username: {user_obj.username} ---")
+                messages.success(request, f"Welcome back, {user_obj.username}!")
+                print("--- LOGIN VIEW: Attempting to redirect to 'ViewYourProfile' ---")
+                return redirect('ViewYourProfile')
             else:
-                speak("I didn't quite catch that, could you say it again?")
-
-        except sr.WaitTimeoutError:
-            speak("I didn't hear anything. Could you please try speaking again?")
-            print("No speech detected within timeout.")
-        except sr.UnknownValueError:
-            speak("Sorry, I couldn't understand what you said. Can you try rephrasing?")
-            print("Google Speech Recognition could not understand audio.")
-        except sr.RequestError as e:
-            speak("Hmm, I'm having trouble reaching my speech understanding service. Please check your internet connection.")
-            print(f"Could not request results from Google Speech Recognition service; {e}")
+                print(f"--- LOGIN VIEW: Password INCORRECT for {username_from_form} ---")
+                messages.error(request, 'Invalid username or password.')
+        except ClientRegister_Model.DoesNotExist:
+            print(f"--- LOGIN VIEW: User {username_from_form} DOES NOT EXIST ---")
+            messages.error(request, 'Invalid username or password.')
         except Exception as e:
-            speak("Oh dear, an unexpected hiccup occurred while I was listening.")
-            print(f"An unexpected error in listen_and_reply: {e}")
-        finally:
-            status_label.config(text="Hi, I'm Nova! Click the button to talk.") 
-            window.update_idletasks()
+            print(f"--- LOGIN VIEW: An unexpected error occurred: {e} ---")
+            messages.error(request, 'An unexpected error occurred during login. Please try again.')
+    
+    print("--- LOGIN VIEW: Rendering login.html ---")
+    return render(request, 'RUser/login.html')
 
 
-def start_listening_thread():
-    """Starts the listening process in a new thread to keep GUI responsive."""
-    talk_button.config(state=tk.DISABLED) 
-    listening_thread = threading.Thread(target=listen_and_reply, daemon=True)
-    listening_thread.start()
-    check_if_thread_is_done(listening_thread)
+# REGISTRATION VIEW
+def Register1(request):
+    print("--- REGISTER1 VIEW: Top of function ---")
+    if request.method == "POST":
+        print("--- REGISTER1 VIEW: POST request received ---")
+        username = request.POST.get('username')
+        email = request.POST.get('email')
+        plain_password = request.POST.get('password')
+        phoneno = request.POST.get('phoneno')
+        country = request.POST.get('country')
+        state = request.POST.get('state')
+        city = request.POST.get('city')
+        address = request.POST.get('address')
+        gender = request.POST.get('gender')
+        print(f"--- REGISTER1 VIEW: Attempting to register username: {username} ---")
 
-def check_if_thread_is_done(thread_to_check):
-    """Checks if the thread is still running. If not, re-enables the button."""
-    if thread_to_check.is_alive():
-        window.after(100, lambda: check_if_thread_is_done(thread_to_check))
+        if ClientRegister_Model.objects.filter(username=username).exists():
+            print(f"--- REGISTER1 VIEW: Username {username} already exists. ---")
+            messages.error(request, f"Username '{username}' already exists. Please choose another.")
+            return render(request, 'RUser/Register1.html', {'entered_data': request.POST})
+
+        if ClientRegister_Model.objects.filter(email=email).exists():
+            print(f"--- REGISTER1 VIEW: Email {email} already exists. ---")
+            messages.error(request, f"Email '{email}' is already registered. Please use another.")
+            return render(request, 'RUser/Register1.html', {'entered_data': request.POST})
+
+        hashed_password = make_password(plain_password)
+        print(f"--- REGISTER1 VIEW: Password hashed for {username}. ---")
+
+        ClientRegister_Model.objects.create(
+            username=username, email=email, password=hashed_password,
+            phoneno=phoneno, country=country, state=state, city=city,
+            address=address, gender=gender
+        )
+        print(f"--- REGISTER1 VIEW: User {username} created in database. ---")
+        messages.success(request, "Registered Successfully! You can now log in.")
+        print(f"--- REGISTER1 VIEW: Redirecting {username} to login page. ---")
+        return redirect('login')
     else:
-        talk_button.config(state=tk.NORMAL)
-        status_label.config(text="Hi, I'm Nova! Click the button to talk.")
-        print("Listening thread finished, button re-enabled.")
+        print("--- REGISTER1 VIEW: GET request, rendering Register1.html ---")
+        return render(request, 'RUser/Register1.html')
 
 
-# Step C.5: Class for Animating the GIF
-class AnimatedGIF(tk.Label):
-    def __init__(self, master, path, size=(200, 200)): 
-        self.master = master
-        self.path = path
-        self.size = size 
-        self.frames = []
-        self.delay = 100  
-        self.idx = 0
+# VIEW USER PROFILE
+def ViewYourProfile(request):
+    print("--- VIEWYOURPROFILE VIEW: Top of function ---")
+    if 'userid' not in request.session:
+        print("--- VIEWYOURPROFILE VIEW: 'userid' NOT in session. Redirecting to login. ---")
+        messages.error(request, "You must be logged in to view your profile.")
+        return redirect('login')
 
-        self._load_gif()
+    userid = request.session['userid']
+    print(f"--- VIEWYOURPROFILE VIEW: 'userid' in session: {userid} ---")
+    try:
+        obj = ClientRegister_Model.objects.get(id=userid)
+        print(f"--- VIEWYOURPROFILE VIEW: User object {obj.username} found. Rendering ViewYourProfile.html ---")
+        return render(request, 'RUser/ViewYourProfile.html', {'object': obj})
+    except ClientRegister_Model.DoesNotExist:
+        print(f"--- VIEWYOURPROFILE VIEW: User with id {userid} DOES NOT EXIST. Clearing session and redirecting to login. ---")
+        messages.error(request, "User profile not found.")
+        if 'userid' in request.session: del request.session['userid']
+        if 'username' in request.session: del request.session['username']
+        return redirect('login')
+    except Exception as e:
+        print(f"--- VIEWYOURPROFILE VIEW: An unexpected error: {e} ---")
+        messages.error(request, "An error occurred viewing your profile.")
+        return redirect('login')
+
+
+# ADD DATASET DETAILS
+def Add_DataSet_Details(request):
+    print("--- ADDDATASETDETAILS VIEW: Top of function ---")
+    if 'userid' not in request.session: # Basic login check
+        messages.error(request, "You must be logged in to add dataset details.")
+        return redirect('login')
+    val = ''
+    return render(request, 'RUser/Add_DataSet_Details.html', {"excel_data": val})
+
+
+# PREDICT INSURANCE CLAIM TYPE
+def Predict_Insurance_Claim_Type(request):
+    print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: Top of function ---")
+    if 'userid' not in request.session:
+        print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: User not logged in. Redirecting. ---")
+        messages.error(request, "You must be logged in to make predictions.")
+        return redirect('login')
+
+    if request.method == "POST":
+        print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: POST request received ---")
         
-        if self.frames: 
-            super().__init__(master, image=self.frames[0], bg="black")
-            self.after(self.delay, self._play) 
-        else: 
-            super().__init__(master, text="Error: GIF not loaded!", fg="red", bg="black", font=("Arial", 14))
-            print(f"CRITICAL: AnimatedGIF class could not load frames for {self.path}")
+        # VVVVVVVV THIS IS THE CORRECTED SECTION VVVVVVVV
+        # Get ALL form data. Ensure the keys ('Account_Code', 'DATE_OF_INTIMATION', etc.)
+        # EXACTLY match the 'name' attributes in your HTML form inputs.
+        Account_Code = request.POST.get('Account_Code')
+        DATE_OF_INTIMATION = request.POST.get('DATE_OF_INTIMATION')
+        DATE_OF_ACCIDENT = request.POST.get('DATE_OF_ACCIDENT')
+        CLAIM_Real = request.POST.get('CLAIM_Real')
+        AGE = request.POST.get('AGE')
+        TYPE = request.POST.get('TYPE')
+        DRIVING_LICENSE_ISSUE = request.POST.get('DRIVING_LICENSE_ISSUE')
+        BODY_TYPE = request.POST.get('BODY_TYPE')
+        MAKE = request.POST.get('MAKE')
+        MODEL = request.POST.get('MODEL')
+        YEAR = request.POST.get('YEAR')
+        CHASIS_Real = request.POST.get('CHASIS_Real')
+        REG = request.POST.get('REG') 
+        SUM_INSURED = request.POST.get('SUM_INSURED')
+        POLICY_NO = request.POST.get('POLICY_NO')
+        POLICY_START = request.POST.get('POLICY_START')
+        POLICY_END = request.POST.get('POLICY_END')
+        INTIMATED_AMOUNT = request.POST.get('INTIMATED_AMOUNT')
+        INTIMATED_SF = request.POST.get('INTIMATED_SF')
+        EXECUTIVE = request.POST.get('EXECUTIVE')
+        PRODUCT = request.POST.get('PRODUCT')
+        POLICYTYPE = request.POST.get('POLICYTYPE')
+        NATIONALITY = request.POST.get('NATIONALITY')
+        # ^^^^^^^^ END OF CORRECTED SECTION ^^^^^^^^^^^
 
+        # Updated print statement to check one of the newly added variables
+        print(f"--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: Form data received, POLICY_NO: {POLICY_NO}, DATE_OF_INTIMATION: {DATE_OF_INTIMATION} ---")
 
-    def _load_gif(self):
+        # Check if essential data for prediction (POLICY_NO) is present
+        if not POLICY_NO:
+            print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: ERROR - POLICY_NO is missing from form data. ---")
+            messages.error(request, "Policy Number is required for prediction.")
+            # It's good to pass back the data the user entered so they don't lose it
+            return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'entered_data': request.POST, 'error_message': "Policy Number is required."})
+
         try:
-            im = Image.open(self.path)
+            print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: Starting ML logic ---")
+            data = pd.read_csv("Insurance_Claim_Datasets.csv", encoding='latin-1')
+            print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: CSV loaded ---")
+
+            def apply_results(results):
+                if results == 'Fraud': return 0
+                elif results == 'Real': return 1
+                return None
+
+            if 'Claim_Staus' not in data.columns:
+                print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: ERROR - 'Claim_Staus' column missing in CSV ---")
+                messages.error(request, "'Claim_Staus' column missing in dataset.")
+                return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'entered_data': request.POST, 'error_message': "'Claim_Staus' column missing."})
+
+            data['Results'] = data['Claim_Staus'].apply(apply_results)
+            data.dropna(subset=['Results'], inplace=True)
+
+            if 'POLICY_NO' not in data.columns:
+                print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: ERROR - 'POLICY_NO' column missing in CSV for features ---")
+                messages.error(request, "'POLICY_NO' column missing in dataset (for features).")
+                return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'entered_data': request.POST, 'error_message': "'POLICY_NO' column missing for features."})
+
+            x_feature = data['POLICY_NO'].astype(str)
+            y_target = data['Results']
+
+            if len(x_feature) == 0 or len(y_target) == 0 or len(x_feature) != len(y_target):
+                print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: ERROR - Feature or target data is empty or mismatched. ---")
+                messages.error(request, "Not enough data to train the model after processing.")
+                return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'entered_data': request.POST, 'error_message': "Insufficient data for training."})
+
+            cv = CountVectorizer(lowercase=False, strip_accents='unicode', ngram_range=(1, 1))
+            x_transformed = cv.fit_transform(x_feature)
+            print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: CountVectorizer fitted ---")
+
+            current_test_size = 0.20
+            min_samples_for_split = 2 # Typically need at least 2 samples for a split
+            if hasattr(y_target, 'nunique') and y_target.nunique() > 1:
+                min_samples_for_split = max(min_samples_for_split, y_target.nunique()) # For stratified split
+
+            if x_transformed.shape[0] < min_samples_for_split:
+                print(f"--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: ERROR - Not enough data samples ({x_transformed.shape[0]}) to split. Need at least {min_samples_for_split}. ---")
+                messages.error(request, f"Not enough data samples to train (need at least {min_samples_for_split}). Please check dataset.")
+                return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'entered_data': request.POST, 'error_message': "Not enough data to train."})
             
-            try:
-                self.delay = im.info['duration']
-                if self.delay == 0: 
-                    self.delay = 100
-            except KeyError:
-                self.delay = 100 
+            if x_transformed.shape[0] * current_test_size < 1:
+                if x_transformed.shape[0] > 1:
+                    current_test_size = 1 / x_transformed.shape[0]
+                else:
+                     print(f"--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: ERROR - Dataset too small ({x_transformed.shape[0]}) for train/test split. ---")
+                     messages.error(request, "Dataset is too small to split for training and testing.")
+                     return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'entered_data': request.POST, 'error_message': "Dataset too small to split."})
 
-            for i in range(im.n_frames):
-                im.seek(i)
-                frame_copy = im.copy().convert("RGBA") 
-                resized_frame = frame_copy.resize(self.size, Image.Resampling.LANCZOS)
-                self.frames.append(ImageTk.PhotoImage(resized_frame))
-            print(f"Successfully loaded {len(self.frames)} frames from {self.path} with delay {self.delay}ms.")
-                
+            X_train, X_test, y_train, y_test = train_test_split(
+                x_transformed, y_target, test_size=current_test_size, random_state=42, 
+                stratify=y_target if y_target.nunique() > 1 else None
+            )
+            print(f"--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: Data split. Train shape: {X_train.shape}, Test shape: {X_test.shape} ---")
+
+            if X_train.shape[0] == 0 or X_test.shape[0] == 0:
+                print(f"--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: ERROR - Training or testing set is empty after split. ---")
+                messages.error(request, "Training or testing data became empty after splitting.")
+                return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'entered_data': request.POST, 'error_message': "Data split resulted in empty sets."})
+
+            models = []
+            nb_model = MultinomialNB()
+            nb_model.fit(X_train, y_train)
+            models.append(('naive_bayes', nb_model))
+            print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: Naive Bayes trained ---")
+
+            svm_model = svm.LinearSVC(dual="auto", C=1.0, max_iter=10000) # Increased max_iter
+            svm_model.fit(X_train, y_train)
+            models.append(('svm', svm_model))
+            print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: SVM trained ---")
+            
+            lr_model = LogisticRegression(random_state=0, solver='lbfgs', max_iter=1000)
+            lr_model.fit(X_train, y_train)
+            models.append(('logistic', lr_model))
+            print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: Logistic Regression trained ---")
+
+            sgd_model = SGDClassifier(loss='hinge', penalty='l2', random_state=0, max_iter=1000, tol=1e-3)
+            sgd_model.fit(X_train, y_train)
+            models.append(('SGDClassifier', sgd_model))
+            print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: SGD Classifier trained ---")
+
+            classifier = VotingClassifier(models)
+            classifier.fit(X_train, y_train)
+            print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: VotingClassifier trained ---")
+
+            input_policy_no_vector = cv.transform([str(POLICY_NO)]).toarray()
+            prediction_result = classifier.predict(input_policy_no_vector)
+            print(f"--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: Prediction made for {POLICY_NO}: {prediction_result} ---")
+
+            prediction_value = int(prediction_result[0])
+            val = 'Fraud Claim' if prediction_value == 0 else 'Real Claim'
+
+            # Now all these variables (DATE_OF_INTIMATION, etc.) should be defined
+            insurance_claim_status.objects.create(
+                Account_Code=Account_Code, DATE_OF_INTIMATION=DATE_OF_INTIMATION,
+                DATE_OF_ACCIDENT=DATE_OF_ACCIDENT, CLAIM_Real=CLAIM_Real, AGE=AGE,
+                TYPE=TYPE, DRIVING_LICENSE_ISSUE=DRIVING_LICENSE_ISSUE, BODY_TYPE=BODY_TYPE,
+                MAKE=MAKE, MODEL=MODEL, YEAR=YEAR, CHASIS_Real=CHASIS_Real, REG=REG,
+                SUM_INSURED=SUM_INSURED, POLICY_NO=POLICY_NO, POLICY_START=POLICY_START,
+                POLICY_END=POLICY_END, INTIMATED_AMOUNT=INTIMATED_AMOUNT,
+                INTIMATED_SF=INTIMATED_SF, EXECUTIVE=EXECUTIVE, PRODUCT=PRODUCT,
+                POLICYTYPE=POLICYTYPE, NATIONALITY=NATIONALITY, PREDICTION=val
+            )
+            print(f"--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: Insurance claim status saved for {POLICY_NO} with prediction {val} ---")
+            messages.success(request, f"Prediction submitted: The claim is predicted as '{val}'.")
+            # Pass back entered_data so the form is not completely empty on success, but also show result
+            return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'objs': val, 'prediction_made': True, 'entered_data': request.POST})
+
         except FileNotFoundError:
-            print(f"ERROR: GIF file not found at '{self.path}'. Make sure it's in the 'assets' folder.")
-            self.frames = [] 
+            print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: ERROR - Dataset file 'Insurance_Claim_Datasets.csv' not found. ---")
+            messages.error(request, "Dataset file 'Insurance_Claim_Datasets.csv' not found. Please check the file path.")
+            return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'entered_data': request.POST, 'error_message': "Dataset file not found."})
+        except KeyError as e:
+            print(f"--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: ERROR - KeyError: {e}. A required column is missing. ---")
+            messages.error(request, f"A required column is missing in the dataset: {e}. Please check your CSV file.")
+            return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'entered_data': request.POST, 'error_message': f"Missing column: {e}"})
+        except ValueError as e:
+            print(f"--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: ERROR - ValueError: {e}. ---")
+            messages.error(request, f"A data-related error occurred during prediction: {e}")
+            return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'entered_data': request.POST, 'error_message': f"Data error: {e}"})
         except Exception as e:
-            print(f"ERROR: Could not load GIF '{self.path}'. Reason: {e}")
-            self.frames = [] 
+            print(f"--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: ERROR - An unexpected error occurred: {e} ---")
+            # For debugging, it's useful to see the full traceback in the console for unexpected errors
+            import traceback
+            traceback.print_exc() 
+            messages.error(request, f"An error occurred during prediction. Please check console for details.") # Generic message to user
+            return render(request, 'RUser/Predict_Insurance_Claim_Type.html', {'entered_data': request.POST, 'error_message': f"An unexpected error occurred. Admin has been notified."})
 
-
-    def _play(self):
-        if not self.frames: 
-            return 
-        try:
-            self.config(image=self.frames[self.idx])
-            self.idx = (self.idx + 1) % len(self.frames)
-            self.after(self.delay, self._play)
-        except tk.TclError as e:
-            print(f"Tkinter error during animation (likely window closed): {e}")
-        except Exception as e:
-            print(f"Unexpected error in _play: {e}")
-
-
-# --- FUNCTION TO CLOSE THE WINDOW ---
-def close_window(event=None): 
-    """Closes Nova's window."""
-    print("Exiting Nova by Escape key or close function...")
-    window.destroy() # This safely closes the tkinter window
-
-
-# Step C.6: Create the Main GUI Window only if this script is run directly
-if __name__ == '__main__': 
-    window = tk.Tk()
-    
-    # --- MAKE WINDOW FULLSCREEN ---
-    window.attributes('-fullscreen', True)
-    # window.title("Nova AI Companion - Lokesh's Project") # No longer strictly needed for fullscreen
-    # window.geometry("800x600") # No longer strictly needed for fullscreen
-    
-    window.configure(bg="black") 
-
-    # --- BIND ESCAPE KEY TO CLOSE WINDOW ---
-    window.bind('<Escape>', close_window) # Pressing Esc will call close_window
-
-    # Step C.7: Load and Display the Animated GIF
-    gif_path = "assets/nova.gif" # Path to your GIF
-    nova_animation = AnimatedGIF(window, gif_path, size=(300,300)) # You can change (300,300)
-    if nova_animation.frames: 
-        nova_animation.pack(pady=20) 
-    else: 
-        error_label_gif = tk.Label(window, text=f"Could not load GIF from {gif_path}", fg="red", bg="black", font=("Arial", 12))
-        error_label_gif.pack(pady=20)
-
-    # Step C.8: Add a Status Label
-    status_label = tk.Label(window, text="Initializing Nova...", fg="lime green", bg="black", font=("Arial", 16))
-    status_label.pack(pady=10)
-
-    # Step C.9: Add a Button to Start Talking
-    talk_button = tk.Button(window, text="🎤 Talk to Nova", 
-                            font=("Arial", 14, "bold"), 
-                            bg="#4CAF50", fg="white",  
-                            activebackground="#45a049", 
-                            activeforeground="white",
-                            padx=15, pady=10,          
-                            relief=tk.RAISED,          
-                            bd=3,                      
-                            command=start_listening_thread)
-    talk_button.pack(pady=20)
-
-    # Step C.10: Initial Welcome Message from Nova (in a thread)
-    def initial_greeting_task():
-        time.sleep(1) 
-        speak("Hello Lokesh! I am Nova, your personal AI companion. I'm online and ready when you are.")
-        status_label.config(text="Hi, I'm Nova! Click the button to talk.")
-    
-    threading.Thread(target=initial_greeting_task, daemon=True).start()
-
-    # Step C.11: Start the GUI Event Loop
-    window.mainloop()
+    # For GET request
+    print("--- PREDICT_INSURANCE_CLAIM_TYPE VIEW: GET request, rendering form ---")
+    return render(request, 'RUser/Predict_Insurance_Claim_Type.html')
