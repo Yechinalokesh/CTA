@@ -1,3 +1,4 @@
+
 class FaceRecognitionSystem:
     def __init__(self, voice_ai_speak_func=None, gui_set_expression_func=None,
                  gui_update_webcam_func=None, shutdown_event=None):
