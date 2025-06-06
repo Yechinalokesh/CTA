@@ -23,3 +23,5 @@ class FaceRecognitionSystem:
 
         self._load_known_faces()
         self._open_log_file()
+
+
