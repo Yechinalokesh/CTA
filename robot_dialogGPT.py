@@ -559,7 +559,7 @@ if __name__ == "__main__":
         gui_instance.run_gui_loop() # This is blocking; runs until GUI window is closed
     except Exception as e:
         print(f"Main App: CRITICAL ERROR in GUI execution: {e}")
-        traceback.print_exc(
+        traceback.print_exc()
     finally:
         print("Main App: GUI loop has finished or an error occurred.")
         
